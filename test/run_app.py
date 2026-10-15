@@ -40,6 +40,12 @@ os.environ.setdefault("OMP_NUM_THREADS", "8")
 os.environ.setdefault("MKL_NUM_THREADS", "8")
 # 关掉 PaddleX 的联网连通性检查：会白等好几秒，模型已在本地时纯属浪费
 os.environ.setdefault("PADDLE_PDX_DISABLE_MODEL_SOURCE_CHECK", "True")
+# 模型缓存指向项目内的 models/（main.py 里也设了；这里设是为了自检也走同一个目录）。
+# PaddleX 在 import 时读取，必须早于任何 paddlex import。
+os.environ.setdefault(
+    "PADDLE_PDX_CACHE_HOME",
+    str(Path(__file__).resolve().parents[1] / "models"),
+)
 
 # ---------------------------------------------------------------------------
 # 路径

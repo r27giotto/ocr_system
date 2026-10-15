@@ -127,18 +127,35 @@ dependencies = [
 
 ### 模型缓存位置与本地清单 【已实测】
 
-模型根目录：`C:\Users\14734\.paddlex\official_models\`（15 个条目）
+**模型已经搬进项目内**：`E:\Python Project\ocr_system\models\official_models\`（15 个目录，477.1 MB）。
+
+做法是 `main.py` / `test/run_app.py` 在**任何 paddlex import 之前**设：
+```python
+os.environ.setdefault("PADDLE_PDX_CACHE_HOME", "<项目根>/models")
+```
+依据：`paddlex/utils/cache.py:29` `CACHE_DIR = os.environ.get("PADDLE_PDX_CACHE_HOME", ~/.paddlex)`
+（**import 时求值**，晚了就无效），模型目录拼法是
+`official_models.py:880` `_save_dir = Path(CACHE_DIR) / "official_models"`，
+再在 `:942` `self._save_dir / f"{candidate_name}"` 找目录；找到就用，找不到才下载。
+
+另一条路是给 `create_model(name, model_dir=...)` 直接传本地目录
+（`paddlex/inference/models/__init__.py:92 _resolve_model_dir`），但那样要逐个改 `EngineManager`，
+且丢失「缺失自动下载」的能力，**所以没采用**。
 
 `config.yaml` 里列出的模型 vs 本地实际：
 
 | 模型 | 本地存在 | 用途 |
 |---|---|---|
-| `PP-OCRv6_small_rec` | ✅ | 默认识别模型 |
-| `PP-OCRv6_medium_rec` | ✅ | 备选识别模型 |
-| `PP-LCNet_x1_0_textline_ori` | ✅ | 默认方向模型 |
-| **`PP-OCRv5_server_rec`** | ❌ **本地没有** | `config.yaml:15` 列了它，**选中就需要联网下载** |
+| `PP-OCRv6_small_rec` | ✅ 20.5 MB | 默认识别模型 |
+| `PP-OCRv6_medium_rec` | ✅ 73.3 MB | 备选识别模型 |
+| `PP-LCNet_x1_0_textline_ori` | ✅ 6.5 MB | 默认方向模型 |
+| **`PP-OCRv5_server_rec`** | ❌ **本地没有** | `config.yaml:15` 列了它，**选中就需要联网下载**（现在会下到项目内 `models/`） |
 
-→ 想离线跑，只能选 `PP-OCRv6_small_rec` / `PP-OCRv6_medium_rec`。
+→ 想完全离线跑，只能选 `PP-OCRv6_small_rec` / `PP-OCRv6_medium_rec`。
+
+⚠️ 副作用要记住：设了 `PADDLE_PDX_CACHE_HOME` 之后 **`~/.paddlex` 不再被读取**。
+要加新模型，要么联网让它下到 `models/`，要么手动从 `~/.paddlex` 复制过来。
+`models/` 已在 `.gitignore` 里（477 MB 的产物不入库）。
 
 ### 其他
 
@@ -376,12 +393,17 @@ engine_status: ok=True   msg=模型已加载
 
 ### 8.5 遗留的环境限制（**不是代码 bug，别去修代码**）
 
-- DSH 沙箱下读不到 `C:\Users\14734\.paddlex` → **在受沙箱限制的会话里跑不通模型加载**；
-  用户自己的终端不受此限制。
+- ~~DSH 沙箱下读不到 `C:\Users\14734\.paddlex`~~ → **已通过把模型搬进项目内解决**（见第 3 节）。
+  现在 `models/` 在工作区内，受限会话也能读，`test/run_app.py --check` 的模型检查项从 WARN 变成 OK。
 - 沙箱下 `.venv` 是**只读**的，`uv pip install` 会 `Failed to create directory ... 拒绝访问`，
   装包必须用一次性非受限执行。
 - uv 默认缓存在 `C:\Users\14734\AppData\Local\uv\cache` 同样被拒，
   需把 `UV_CACHE_DIR` 指到工作区内（本项目用 `.uv-cache/`，已加入 `.gitignore`）。
+
+### 8.6 模型读取位置（2026-10-16 变更，**这是现在的正确答案**）
+
+模型**不再**从 `~/.paddlex` 读，而是从项目内的 `models/official_models/` 读。
+机制、依据与副作用见第 3 节「模型缓存位置与本地清单」。
 
 ---
 
@@ -462,3 +484,4 @@ $env:PADDLE_PDX_DISABLE_MODEL_SOURCE_CHECK = 'True'
 | — | 修复：paddlex 3.7.2、numpy 2.3.5、opencv-contrib-python 5.0.0.93（移除 opencv-python）、pypdfium2 5.14.0、python-bidi 0.6.11；`uv.lock` 已刷新 |
 | — | 顺手修掉两处「诊断障碍」：`model_panel.py` 的 `msg[:30]` 截断、`workers.py` 只打印 `str(e)` 无堆栈 |
 | — | 【已实测】走 GUI 真实链路 `AppController.load_models` → `engine_status: ok=True 模型已加载`；第 8 节据此重写为本文件当前内容 |
+| m00641 | 用户：「能不能将所有模型都放在项目目录内，然后直接读取」→ 15 个模型目录（477.1 MB）复制到 `models/official_models/`；`main.py` + `test/run_app.py` 设 `PADDLE_PDX_CACHE_HOME`；`models/` 加 gitignore；`--check` 从 2 个 WARN 变成全部通过 |

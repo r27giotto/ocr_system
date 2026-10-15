@@ -28,7 +28,10 @@ logs/*.log
 logs/*.csv
 
 # ---------- 模型权重 ----------
-# 模型走 PaddleX 官方缓存目录，不随仓库分发
+# 模型放在项目内的 models/official_models/（由 main.py 里的 PADDLE_PDX_CACHE_HOME 指定），
+# 不随仓库分发：整个目录 477 MB，且是可从 PaddleX 官方重新下载的产物。
+models/
+# 兜底：万一模型文件出现在别处
 *.onnx
 *.pdmodel
 *.pdiparams

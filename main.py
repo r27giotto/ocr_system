@@ -6,6 +6,15 @@ import yaml
 os.environ["OMP_NUM_THREADS"] = "8"
 os.environ["MKL_NUM_THREADS"] = "8"
 
+# ★ 模型缓存改到项目内的 models/，不再用 ~/.paddlex
+# PaddleX 在 import 时就把 PADDLE_PDX_CACHE_HOME 读进常量（paddlex/utils/cache.py:29），
+# 所以必须在任何 paddlex 相关 import 之前设置。
+# 目录结构必须是 <CACHE_HOME>/official_models/<模型名>/，模型不存在时会自动下载到这里。
+os.environ.setdefault(
+    "PADDLE_PDX_CACHE_HOME",
+    os.path.join(os.path.dirname(os.path.abspath(__file__)), "models"),
+)
+
 import cv2
 cv2.setNumThreads(1)
 
