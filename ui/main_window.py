@@ -77,8 +77,9 @@ class MainWindow(QMainWindow):
         splitter.setStretchFactor(1, 1)
 
         # ---- 底部：历史缩略图 ----
-        # 放进竖直 QSplitter，用户可以直接拖动分隔条动态调节历史区高度；
-        # 历史缩略图本身也会跟着高度重新缩放（见 HistoryPanel.resizeEvent）。
+        # 放进竖直 QSplitter，用户可以直接拖动分隔条调节历史区高度；
+        # 但缩略图尺寸是固定的（HistoryItem.THUMB_W/THUMB_H），拉高历史区
+        # 只会露出更多滚动区，不会把图片放大。
         self.history_panel = HistoryPanel()
 
         self.v_splitter = QSplitter(Qt.Orientation.Vertical)
@@ -88,7 +89,8 @@ class MainWindow(QMainWindow):
         self.v_splitter.setStretchFactor(1, 1)
         self.v_splitter.setCollapsible(0, False)
         self.v_splitter.setCollapsible(1, False)
-        self.v_splitter.setSizes([660, 190])
+        # 历史区最小高度由布局推导（实测约 221px），这里给它一个略大的初值
+        self.v_splitter.setSizes([640, 230])
         self.setCentralWidget(self.v_splitter)
 
         # ---- 状态栏 ----

@@ -296,10 +296,10 @@ demo 用的样张目录：E:\Python Project\project_0\data\test3   （11 张图�
 | `infra/csv_logger.py` | 39 | CSV 记录 | ⚠️ **有截断缺陷，见缺陷①** |
 | `app/controller.py` | — | `AppController`（编排层） | ⚠️ 仅构造验证 |
 | `app/workers.py` | — | `EngineLoadWorker` / `InferenceWorker`（QThread） | ⚠️ 仅 import 验证 |
-| `ui/main_window.py` | 178 | 主窗口，组装七个面板；竖直 `QSplitter` 分隔历史区，右列包 `QScrollArea` | ✅ 已实测（见 §6.1） |
+| `ui/main_window.py` | 181 | 主窗口，组装七个面板；竖直 `QSplitter` 分隔历史区，右列包 `QScrollArea` | ✅ 已实测（见 §6.1） |
 | `ui/overlay.py` | — | 画框 + 结果叠加 | ⚠️ 仅 import 验证 |
 | `ui/widgets/angle_panel.py` | 176 | 固定角度 0°/180° 单独一行（不受负号影响）+ 旋转角度 10°~170° 网格 17 格 +「负号」开关 + 全选/仅 0°/反选/默认 | ✅ 已实测 |
-| `ui/widgets/history_panel.py` | 168 | 历史缩略图，高度自适应 + 清除按钮 | ✅ 已实测 |
+| `ui/widgets/history_panel.py` | 171 | 历史缩略图，**固定 120×120** + 可拖高的区域 + 清除按钮 | ✅ 已实测（见 §6.2） |
 | `ui/widgets/*.py`（其余五个） | — | 模型/源/结果/串口/图像面板 | ⚠️ 仅 import 验证 |
 
 `core/models.py` 的 `RecognitionResult` 字段（写代码时对齐这个）：
@@ -327,10 +327,10 @@ QVBoxLayout(centralWidget) 实际上已被替换为：
   └── HistoryPanel          ← 拖动这个分隔条即可动态调节历史区高度
 ```
 
-- 历史缩略图**不再是固定 190px**：`HistoryPanel.resizeEvent` 触发 120ms 防抖的
-  `_apply_thumb_height()`，按 `scroll.viewport().height()-10` 重新下发高度，
-  夹在 `[56, 240]`；`HistoryItem._render_thumb()` 用 `np.zeros` 画布**等比**缩放，
-  不是拉伸（所以窄高比例下会有黑边，属正常）。
+- 历史缩略图是**固定尺寸**（m01143 改动）：`HistoryItem.THUMB_W = THUMB_H = 120`，
+  卡片宽 `ITEM_W = THUMB_W + 12 = 132`，整个卡片 `setFixedSize` + 固定尺寸策略。
+  缩略图用 `np.zeros((120,120,3))` 黑底 + 等比缩放居中贴图（不是拉伸，所以会有黑边，属正常）。
+  **拉高历史区只会露出更多滚动区，不会放大图片**——这条是 m01143 用户明确要求的。
 - 「清除历史」按钮 → `HistoryPanel.clear()` + 发 `cleared` 信号 →
   `MainWindow._on_history_cleared()` 把状态栏统计一并归零。
 - ⚠️ **布局陷阱（踩过一次）**：右侧那列面板的总最小高度（实测 877px，其中角度面板
@@ -340,6 +340,21 @@ QVBoxLayout(centralWidget) 实际上已被替换为：
   `right.minimumSizeHint().width() + 竖向滚动条宽度`——`QScrollArea` 自己算的最小宽度
   不含内部控件的要求，否则外侧会把右列压窄到内容以下、把控件裁掉。
   结论：右列比视口高是**常态**，它自己出竖向滚动条，不影响历史区。
+- ⚠️ **反向陷阱（也踩过一次，即 m01143 的起因）**：历史区最小高度不能任它被钳。
+  `HistoryPanel.MIN_ROW_H = HistoryItem.THUMB_H + 44 = 164` 并 `scroll.setMinimumHeight(MIN_ROW_H)`，
+  面板实测 `minimumSizeHint` 高 = 221；`main_window` 的 `setSizes([640, 230])` 给的这个初值会被
+  分割器钳到 221 附近。**把最小值设太小 ⇒ 卡片被裁一半**；把缩略图尺寸绑到区域高度 ⇒
+  违背 m01143。两者要分开：区域可调，图片固定。
+
+### 6.2 历史缩略图尺寸（m01143，已实测）
+
+| 历史区实际高 | 图片框 | 卡片 |
+|---|---|---|
+| 221 / 277 / 394 / 700 | 120×120 | 132×161 |
+
+`_verify_hist.py`（面板单独测 120/200/300/480/700 五种高度）与
+`_verify_hist_win.py`（真实 `MainWindow` 里 `v_splitter.setSizes` 拖了四档，实际落到
+221/277/394/221）两次都得到完全相同的 120×120 与 132×161。两个脚本与三张截图已删除。
 
 ---
 
@@ -575,3 +590,5 @@ $env:PADDLE_PDX_DISABLE_MODEL_SOURCE_CHECK = 'True'
 | — | 【已实测】`_verify_angle.py` 离屏验收：19 格 + 无负数格；config `[-90,-60,-30,0,30,60,90,180]` → 勾 `[0,30,60,90,180]` + 负号 → 展开回原 8 个角度；取消负号→5 个；全选→36 个（有 180 无 -180）；仅 0°→`[0]`；反选→空；默认→复位；批量操作只发 1 次信号；含 -45/45 的旧配置被丢弃。`_verify_win.py`：角度面板最小高 236→167px，右列无横向滚动条、历史动态高度仍生效。提交 `7b31b50` |
 | m01073 | 用户：「前端角度选项还要修改：0度和180度独立出来不受负号影响，因为-0度-180度没意义」→ `AnglePanel` 拆成两组：**固定角度 0°/180° 单独一行、永不受「负号」影响**；旋转角度 10°~170° 共 17 格由「负号」控制。因为旋转组里没有 0/180，展开 `-a` 永不撞车，`selected_angles()` 里的特例（`if a != 0`、`discard(-180)`）**全部删掉** |
 | — | 【已实测】`_verify_angle2.py` 离屏验收：固定组 `(0,180)` / 旋转组 17 格 / 总数 19；config 旧值解析结果与改动前**逐位相同** `[0,-30,30,-60,60,-90,90,180]`；负号开↔关时 0° 与 180° 恒在且恒不带负号；只勾 0°+负号→`[0]`、只勾 180°+负号→`[180]`（无 -0°/-180°）；全选+负号=36、无负号=19；批量按钮各只发 1 次信号；含 -45/45 旧配置仍被丢弃。面板最小尺寸 358x188（原 376x167），`compileall` 退出码 0。提交 `3a0fea6` |
+| m01143 | 用户：「历史记录区里的图片框会因为我拉高历史记录区的高度而变化，我需要固定图片的大小」→ 推翻 m00749 的「缩略图随高度缩放」设计：`HistoryItem.THUMB_W = THUMB_H = 120`、卡片固定 132×161；删掉 `set_thumb_height`/`MIN_THUMB_H`/`MAX_THUMB_H`/`HistoryPanel.resizeEvent`/`_resize_timer`/`_desired_thumb_h`/`_apply_thumb_height`；改为 `MIN_ROW_H = THUMB_H + 44 = 164` 并 `scroll.setMinimumHeight(MIN_ROW_H)`；`main_window` 的 `setSizes` 由 `[660, 190]` 改 `[640, 230]`。**区域仍可拖高，图片尺寸恒定**（见 §6.2） |
+| — | 【已实测】`_verify_hist.py`（面板单独 120/200/300/480/700 五种高度）+ `_verify_hist_win.py`（真实 `MainWindow` 里 `v_splitter.setSizes` 四档，实际落到 221/277/394/221）两次结果完全一致：图片框恒 120×120、卡片恒 132×161；`HistoryPanel.minimumSizeHint` 高 221；`compileall` 退出码 0 |

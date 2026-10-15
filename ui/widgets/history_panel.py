@@ -14,33 +14,35 @@ from core.models import RecognitionResult
 class HistoryItem(QWidget):
     """单条历史记录：缩略图 + 「数字 → 1/0」。
 
-    缩略图高度由 HistoryPanel 按面板高度动态下发给 set_thumb_height()，
-    这里重新按比例缩放原图（不拉伸变形），原始帧一直留在 res.frame 里。
+    缩略图尺寸**固定**（THUMB_W x THUMB_H），不随历史区和窗口的大小变化。
+    原图按比例缩放后居中放进这块固定画布，所以既不会被拉伸变形，
+    也不会因为拉高历史区就跟着变大。原始帧一直在 res.frame 里。
     """
 
     clicked = pyqtSignal(object)
 
-    THUMB_W = 160
-    MIN_THUMB_H = 56
-    MAX_THUMB_H = 240
+    THUMB_W = 120
+    THUMB_H = 120
+    ITEM_W = THUMB_W + 12          # 左右各 6px 内边距
 
-    def __init__(self, res: RecognitionResult, thumb_h: int = 120):
+    def __init__(self, res: RecognitionResult):
         super().__init__()
         self.res = res
-        self._thumb_h = int(thumb_h)
-        self.setFixedWidth(180)
-        self.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Preferred)
+        self.setFixedWidth(self.ITEM_W)
+        # 宽高都由内容决定，历史区变高变矮都不再影响它
+        self.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
         # 让 QWidget 子类也能绘制自己的样式表边框
         self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
 
-        # 1) 缩略图容器
+        # 1) 缩略图
         self.thumb_label = QLabel()
         self.thumb_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.thumb_label.setStyleSheet("background:#20242b; color:#888;")
+        self.thumb_label.setFixedSize(self.THUMB_W, self.THUMB_H)
 
         # 2) 文字信息
         num_text = res.number or "--"
-        self.info_label = QLabel(f"{res.filename[:20]}\n{num_text} → {res.output_value}")
+        self.info_label = QLabel(f"{res.filename[:14]}\n{num_text} → {res.output_value}")
         self.info_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.info_label.setWordWrap(True)
 
@@ -62,27 +64,18 @@ class HistoryItem(QWidget):
         v.setSpacing(3)
         v.addWidget(self.thumb_label)
         v.addWidget(self.info_label)
-        v.addStretch(1)
 
         self._render_thumb()
 
     # ---------- 缩略图 ----------
-    def set_thumb_height(self, h: int):
-        h = max(self.MIN_THUMB_H, min(self.MAX_THUMB_H, int(h)))
-        if h == self._thumb_h:
-            return
-        self._thumb_h = h
-        self._render_thumb()
-
     @property
-    def thumb_height(self) -> int:
-        return self._thumb_h
+    def thumb_size(self) -> tuple:
+        return (self.THUMB_W, self.THUMB_H)
 
     def _render_thumb(self):
-        w, h = self.THUMB_W, self._thumb_h
+        w, h = self.THUMB_W, self.THUMB_H
         if self.res.frame is None:
             self.thumb_label.setText("无图")
-            self.thumb_label.setFixedSize(w, h)
             return
 
         self.thumb_label.setText("")
@@ -94,7 +87,7 @@ class HistoryItem(QWidget):
         interp = cv2.INTER_AREA if scale < 1 else cv2.INTER_LINEAR
         small = cv2.resize(vis, (nw, nh), interpolation=interp)
 
-        # 居中放进固定尺寸画布：保持长宽比，不随高度变化而变形
+        # 居中放进固定尺寸画布：保持长宽比，不拉伸
         canvas = np.zeros((h, w, 3), dtype=vis.dtype)
         y0, x0 = (h - nh) // 2, (w - nw) // 2
         canvas[y0:y0 + nh, x0:x0 + nw] = small
@@ -102,7 +95,6 @@ class HistoryItem(QWidget):
         rgb = np.ascontiguousarray(cv2.cvtColor(canvas, cv2.COLOR_BGR2RGB))
         qimg = QImage(rgb.data, w, h, 3 * w, QImage.Format.Format_RGB888)
         self.thumb_label.setPixmap(QPixmap.fromImage(qimg))
-        self.thumb_label.setFixedSize(w, h)
 
     def mousePressEvent(self, e):
         self.clicked.emit(self.res)
@@ -113,11 +105,13 @@ class HistoryPanel(QGroupBox):
     cleared = pyqtSignal()
 
     MAX_ITEMS = 200
-    DEFAULT_THUMB_H = 120
+    # 一行缩略图需要的最小高度：图 + 两行文字 + 左右/上下内边距 + 横向滚动条
+    MIN_ROW_H = HistoryItem.THUMB_H + 44
 
     def __init__(self):
         super().__init__("检测结果历史")
-        self.setMinimumHeight(120)
+        # 不再写死高度：下面把「至少能完整显示一行」作为滚动区的最小高度，
+        # 面板自己的最小高度由布局推导出来。
         self.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Expanding)
 
         # ---- 顶部一行：计数 + 清除历史 ----
@@ -139,6 +133,7 @@ class HistoryPanel(QGroupBox):
             Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         self.scroll.setHorizontalScrollBarPolicy(
             Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        self.scroll.setMinimumHeight(self.MIN_ROW_H)
 
         self.container = QWidget()
         self.layout = QHBoxLayout(self.container)
@@ -152,35 +147,9 @@ class HistoryPanel(QGroupBox):
         v.addLayout(head)
         v.addWidget(self.scroll, 1)
 
-        # ---- 高度变化 → 节流重排缩略图 ----
-        self._thumb_h = self.DEFAULT_THUMB_H
-        self._resize_timer = QTimer(self)
-        self._resize_timer.setSingleShot(True)
-        self._resize_timer.setInterval(120)
-        self._resize_timer.timeout.connect(self._apply_thumb_height)
-
-    # ---------- 高度自适应 ----------
-    def resizeEvent(self, e):
-        super().resizeEvent(e)
-        self._resize_timer.start()
-
-    def _desired_thumb_h(self) -> int:
-        h = self.scroll.viewport().height() - 10
-        return max(HistoryItem.MIN_THUMB_H, min(HistoryItem.MAX_THUMB_H, h))
-
-    def _apply_thumb_height(self):
-        h = self._desired_thumb_h()
-        if h == self._thumb_h:
-            return
-        self._thumb_h = h
-        for i in range(self.layout.count()):
-            w = self.layout.itemAt(i).widget()
-            if isinstance(w, HistoryItem):
-                w.set_thumb_height(h)
-
     # ---------- 数据 ----------
     def add_result(self, res: RecognitionResult):
-        item = HistoryItem(res, self._thumb_h)
+        item = HistoryItem(res)
         item.clicked.connect(self.item_clicked.emit)
         self.layout.addWidget(item)
 
