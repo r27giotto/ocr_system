@@ -299,7 +299,7 @@ demo 用的样张目录：E:\Python Project\project_0\data\test3   （11 张图�
 | `ui/main_window.py` | 181 | 主窗口，组装七个面板；竖直 `QSplitter` 分隔历史区，右列包 `QScrollArea` | ✅ 已实测（见 §6.1） |
 | `ui/overlay.py` | — | 画框 + 结果叠加 | ⚠️ 仅 import 验证 |
 | `ui/widgets/angle_panel.py` | 176 | 固定角度 0°/180° 单独一行（不受负号影响）+ 旋转角度 10°~170° 网格 17 格 +「负号」开关 + 全选/仅 0°/反选/默认 | ✅ 已实测 |
-| `ui/widgets/history_panel.py` | 171 | 历史缩略图，**固定 120×120** + 可拖高的区域 + 清除按钮 | ✅ 已实测（见 §6.2） |
+| `ui/widgets/history_panel.py` | 172 | 历史缩略图，**固定 120×120** + 高度可一直往下拖（最小 113px）+ 横/竖滚轴按需 + 清除按钮 | ✅ 已实测（见 §6.2） |
 | `ui/widgets/*.py`（其余五个） | — | 模型/源/结果/串口/图像面板 | ⚠️ 仅 import 验证 |
 
 `core/models.py` 的 `RecognitionResult` 字段（写代码时对齐这个）：
@@ -340,21 +340,31 @@ QVBoxLayout(centralWidget) 实际上已被替换为：
   `right.minimumSizeHint().width() + 竖向滚动条宽度`——`QScrollArea` 自己算的最小宽度
   不含内部控件的要求，否则外侧会把右列压窄到内容以下、把控件裁掉。
   结论：右列比视口高是**常态**，它自己出竖向滚动条，不影响历史区。
-- ⚠️ **反向陷阱（也踩过一次，即 m01143 的起因）**：历史区最小高度不能任它被钳。
-  `HistoryPanel.MIN_ROW_H = HistoryItem.THUMB_H + 44 = 164` 并 `scroll.setMinimumHeight(MIN_ROW_H)`，
-  面板实测 `minimumSizeHint` 高 = 221；`main_window` 的 `setSizes([640, 230])` 给的这个初值会被
-  分割器钳到 221 附近。**把最小值设太小 ⇒ 卡片被裁一半**；把缩略图尺寸绑到区域高度 ⇒
-  违背 m01143。两者要分开：区域可调，图片固定。
+- ⚠️ **反向陷阱（踩过两次）**：
+  1. m01143 之前把缩略图尺寸绑到历史区高度 ⇒ 拉高历史区图片跟着变大（用户不接受）。
+     结论：**区域可调，图片固定**，两者必须分开。
+  2. m01143 修完把 `scroll.setMinimumHeight(THUMB_H + 44 = 164)` 当最小值 ⇒
+     面板 `minimumSizeHint` 高被顶到 221，分割条**往下拖不动**（用户 m01221 报的问题）。
+     修法：面板最小值放开到 `HistoryPanel.MIN_VIEW_H = 56`（面板实测最小 113px），
+     同时把 `setVerticalScrollBarPolicy` 从 `ScrollBarAlwaysOff` 改成 `ScrollBarAsNeeded`
+     ——矮了缩略图会被裁切，**靠竖向滚轴看全**；横向滚轴照旧按需出现。
+     `main_window` 的 `setSizes([640, 230])` 初值不变（230 能完整显示一行）。
 
-### 6.2 历史缩略图尺寸（m01143，已实测）
+### 6.2 历史缩略图尺寸与历史区高度（m01143 + m01221，已实测）
 
-| 历史区实际高 | 图片框 | 卡片 |
-|---|---|---|
-| 221 / 277 / 394 / 700 | 120×120 | 132×161 |
+| 历史区高 | 图片框 | 卡片 | 竖向滚轴 |
+|---|---|---|---|
+| 100 / 140 | 120×120 | 132×161 | 有 |
+| 230 / 277 / 394 / 400 / 700 | 120×120 | 132×161 | 无 |
 
-`_verify_hist.py`（面板单独测 120/200/300/480/700 五种高度）与
-`_verify_hist_win.py`（真实 `MainWindow` 里 `v_splitter.setSizes` 拖了四档，实际落到
-221/277/394/221）两次都得到完全相同的 120×120 与 132×161。两个脚本与三张截图已删除。
+- **图片尺寸恒定**：面板单独测 96/120/200/300/500/800 六种高度，以及真实 `MainWindow`
+  里 `v_splitter.setSizes` 四档，图片框一律 120×120、卡片一律 132×161。
+- **历史区高度可一直往下拖**：最小能拖到 **113px**（面板 `minimumSizeHint` 162×113），
+  原来是 221px 就到底了。想要更低可以把 `MIN_VIEW_H` 调小，或把
+  `main_window` 里的 `v_splitter.setCollapsible(1, False)` 改成 `True` 允许完全收起。
+- **滚轴行为**：竖轴按需（视口 < 169 时出现），横轴按需（内容宽度 > 视口时出现，
+  实测面板宽 400 + 8 条记录时 `maximum() = 726`）。
+- 验证脚本 `_verify_hist.py` / `_verify_hist_win.py` / `_verify_scroll.py` 与截图均已删除。
 
 ---
 
@@ -591,4 +601,6 @@ $env:PADDLE_PDX_DISABLE_MODEL_SOURCE_CHECK = 'True'
 | m01073 | 用户：「前端角度选项还要修改：0度和180度独立出来不受负号影响，因为-0度-180度没意义」→ `AnglePanel` 拆成两组：**固定角度 0°/180° 单独一行、永不受「负号」影响**；旋转角度 10°~170° 共 17 格由「负号」控制。因为旋转组里没有 0/180，展开 `-a` 永不撞车，`selected_angles()` 里的特例（`if a != 0`、`discard(-180)`）**全部删掉** |
 | — | 【已实测】`_verify_angle2.py` 离屏验收：固定组 `(0,180)` / 旋转组 17 格 / 总数 19；config 旧值解析结果与改动前**逐位相同** `[0,-30,30,-60,60,-90,90,180]`；负号开↔关时 0° 与 180° 恒在且恒不带负号；只勾 0°+负号→`[0]`、只勾 180°+负号→`[180]`（无 -0°/-180°）；全选+负号=36、无负号=19；批量按钮各只发 1 次信号；含 -45/45 旧配置仍被丢弃。面板最小尺寸 358x188（原 376x167），`compileall` 退出码 0。提交 `3a0fea6` |
 | m01143 | 用户：「历史记录区里的图片框会因为我拉高历史记录区的高度而变化，我需要固定图片的大小」→ 推翻 m00749 的「缩略图随高度缩放」设计：`HistoryItem.THUMB_W = THUMB_H = 120`、卡片固定 132×161；删掉 `set_thumb_height`/`MIN_THUMB_H`/`MAX_THUMB_H`/`HistoryPanel.resizeEvent`/`_resize_timer`/`_desired_thumb_h`/`_apply_thumb_height`；改为 `MIN_ROW_H = THUMB_H + 44 = 164` 并 `scroll.setMinimumHeight(MIN_ROW_H)`；`main_window` 的 `setSizes` 由 `[660, 190]` 改 `[640, 230]`。**区域仍可拖高，图片尺寸恒定**（见 §6.2） |
-| — | 【已实测】`_verify_hist.py`（面板单独 120/200/300/480/700 五种高度）+ `_verify_hist_win.py`（真实 `MainWindow` 里 `v_splitter.setSizes` 四档，实际落到 221/277/394/221）两次结果完全一致：图片框恒 120×120、卡片恒 132×161；`HistoryPanel.minimumSizeHint` 高 221；`compileall` 退出码 0 |
+| — | 【已实测】`_verify_hist.py`（面板单独 120/200/300/480/700 五种高度）+ `_verify_hist_win.py`（真实 `MainWindow` 里 `v_splitter.setSizes` 四档，实际落到 221/277/394/221）两次结果完全一致：图片框恒 120×120、卡片恒 132×161；`HistoryPanel.minimumSizeHint` 高 221；`compileall` 退出码 0。提交 `97d482b` |
+| m01221 | 用户：「但现在历史记录区不能一直向下拉了，我需要可以一直向下拉，然后有一个滚轴」→ 这是我 m01143 引入的回归：`scroll.setMinimumHeight(164)` 把面板最小高度顶到 221px，分割条拖到底就停住。修：`MIN_VIEW_H = 56`（面板最小 113px，实测能拖到 113）+ `setVerticalScrollBarPolicy(ScrollBarAsNeeded)`（矮了缩略图被裁切，靠竖向滚轴看全）。`HistoryItem` 尺寸一点没动 |
+| — | 【已实测】`_verify_scroll.py`：面板 100/140px → 竖向滚轴有、230/400px → 无；面板宽 400 + 8 条记录 → 横向滚轴有（`maximum()=726`）、宽 1200 → 无；96/120/200/300/500/800 六种高度下图片框恒 120×120、卡片恒 132×161；真实 `MainWindow` 里能拖到 113px（原 221px）；`compileall` 退出码 0 |

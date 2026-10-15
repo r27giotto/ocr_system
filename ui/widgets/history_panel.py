@@ -105,13 +105,15 @@ class HistoryPanel(QGroupBox):
     cleared = pyqtSignal()
 
     MAX_ITEMS = 200
-    # 一行缩略图需要的最小高度：图 + 两行文字 + 左右/上下内边距 + 横向滚动条
-    MIN_ROW_H = HistoryItem.THUMB_H + 44
+    # 允许被拖到的最小高度：只剩滚轴 + 一小条缩略图。
+    # （完整显示一条记录需要 THUMB_H + 44 = 164，即面板约 221px；
+    #   拖到比这更矮时缩略图会被裁切，靠**竖向滚轴**看全。）
+    MIN_VIEW_H = 56
 
     def __init__(self):
         super().__init__("检测结果历史")
-        # 不再写死高度：下面把「至少能完整显示一行」作为滚动区的最小高度，
-        # 面板自己的最小高度由布局推导出来。
+        # 高度完全交给外层竖直 QSplitter 的分隔条：往上拖变高、往下拖变矮，
+        # 没有硬性下限（只有 MIN_VIEW_H 这么一点底），不会被钳住。
         self.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Expanding)
 
         # ---- 顶部一行：计数 + 清除历史 ----
@@ -126,14 +128,16 @@ class HistoryPanel(QGroupBox):
         head.addStretch(1)
         head.addWidget(self.btn_clear)
 
-        # ---- 横向滚动的缩略图条 ----
+        # ---- 缩略图条：横向滚轴翻记录，竖向滚轴看被裁掉的部分 ----
         self.scroll = QScrollArea()
         self.scroll.setWidgetResizable(True)
+        # 历史区被拖矮时缩略图放不下，需要竖向滚轴才能看全，
+        # 所以这里必须是 AsNeeded（原来是 AlwaysOff）。
         self.scroll.setVerticalScrollBarPolicy(
-            Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+            Qt.ScrollBarPolicy.ScrollBarAsNeeded)
         self.scroll.setHorizontalScrollBarPolicy(
             Qt.ScrollBarPolicy.ScrollBarAsNeeded)
-        self.scroll.setMinimumHeight(self.MIN_ROW_H)
+        self.scroll.setMinimumHeight(self.MIN_VIEW_H)
 
         self.container = QWidget()
         self.layout = QHBoxLayout(self.container)
