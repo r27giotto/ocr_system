@@ -42,3 +42,12 @@ models/
 Thumbs.db
 Desktop.ini
 .DS_Store
+
+# ---------- 排查用的临时文件（用完即删，别误提交）----------
+# 约定：临时探针脚本一律以 _ 开头，产出物也用 _ 开头。
+# 注意不要写成 "_*.py" —— 那会把 __init__.py 也忽略掉。
+_verify_*.py
+_probe_*.py
+_*.txt
+_*.png
+_*.log
