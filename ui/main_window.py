@@ -123,6 +123,7 @@ class MainWindow(QMainWindow):
 
         # 控制器 → UI
         self.controller.engine_status.connect(self.model_panel.set_loaded)
+        self.controller.engine_progress.connect(self.model_panel.set_progress)
         self.controller.frame_ready.connect(self.image_view.set_frame)
         self.controller.result_ready.connect(self._on_result)
         self.controller.serial_sent.connect(self._on_serial_sent)

@@ -17,7 +17,8 @@ class AppController(QObject):
     frame_ready = pyqtSignal(object, str)
     result_ready = pyqtSignal(object)
     serial_sent = pyqtSignal(int, bool, str)
-    engine_status = pyqtSignal(bool, str)
+    engine_status = pyqtSignal(bool, str)   # 终态：模型加载完成/失败
+    engine_progress = pyqtSignal(str)       # 过程：正在加载哪个模型
     source_finished = pyqtSignal()
 
     def __init__(self, config: dict):
@@ -61,8 +62,9 @@ class AppController(QObject):
     def load_models(self, rec_name: str, ori_name: str):
         self.rec.set_models(rec_name, ori_name)
         self._load_worker = EngineLoadWorker(self.engine, rec_name, ori_name)
-        self._load_worker.progress.connect(
-            lambda s: self.engine_status.emit(False, s))
+        # 进度和终态必须走两条信号：engine_status 带 ok 布尔，
+        # 之前把进度也塞进它（ok=False），界面就把「正在加载 X」当成「加载失败」。
+        self._load_worker.progress.connect(self.engine_progress.emit)
         self._load_worker.done.connect(self.engine_status.emit)
         self._load_worker.start()
 

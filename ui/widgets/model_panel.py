@@ -38,13 +38,25 @@ class ModelPanel(QGroupBox):
         v.addLayout(bottom)
 
     def _on_load(self):
-        self.btn_load.setEnabled(False)
-        self.status_label.setText("● 加载中…")
-        self.status_label.setStyleSheet("color: orange;")
+        self.set_progress()
         self.load_requested.emit(
             self.rec_combo.currentText(),
             self.ori_combo.currentText(),
         )
+
+    def set_progress(self, msg: str = ""):
+        """加载过程中的进度提示。
+
+        必须和 set_loaded 分开：加载中 != 失败。以前两者共用
+        engine_status(ok=False)，界面会先闪两次红色的「加载失败」。
+        这里也**不能**放开按钮，否则加载没结束就能再点一次。
+        """
+        full = (msg or "").strip()
+        brief = full.splitlines()[-1] if full else ""
+        self.status_label.setText(f"● 加载中… {brief[:40]}" if brief else "● 加载中…")
+        self.status_label.setToolTip(full)
+        self.status_label.setStyleSheet("color: orange;")
+        self.btn_load.setEnabled(False)
 
     def set_loaded(self, ok: bool, msg: str = ""):
         self.btn_load.setEnabled(True)

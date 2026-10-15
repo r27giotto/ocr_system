@@ -421,6 +421,9 @@ engine_status: ok=True   msg=模型已加载
 ```
 另单独验证：`create_model('PP-OCRv6_small_rec')` OK 1.6s、`create_model('PP-LCNet_x1_0_textline_ori')` OK 0.3s。
 
+> ⚠️ 上面这两行 `ok=False  msg=正在加载…` 当时被我当成正常输出，**其实是 bug**：
+> 界面会把它们渲染成红色的「加载失败」。见 §8.7（已修）。
+
 ### 8.4 顺手修掉的两个「诊断障碍」（这才是当初看不懂的原因）
 
 - `ui/widgets/model_panel.py:55` 原本是 `msg[:30]` —— **把真实异常截断了**，所以界面上只剩「加载失败」。
@@ -441,6 +444,39 @@ engine_status: ok=True   msg=模型已加载
 模型**不再**从 `~/.paddlex` 读，而是从项目内的 `models/official_models/` 读。
 机制、依据与副作用见第 3 节「模型缓存位置与本地清单」。
 
+### 8.7 「先闪一下加载失败，再变已加载」（用户报，已修）
+
+**现象**：点「加载模型」→ 先红字「加载失败: 加载识别模型 …」→ 再绿字「已加载」。
+
+**根因（单一）**：进度和终态共用了一条带 `ok` 布尔的信号。
+`app/controller.py` 原来是
+```python
+self._load_worker.progress.connect(lambda s: self.engine_status.emit(False, s))
+self._load_worker.done.connect(self.engine_status.emit)
+```
+而 `ui/main_window.py:125` 是 `engine_status → model_panel.set_loaded`，
+`set_loaded(ok=False, …)` 的分支就是**加载失败**。
+于是 `core/engine.py:18/:26` 那两句进度文案（「加载识别模型 X …」）被渲染成失败。
+
+**顺带修掉的第二个 bug**：`set_loaded` 开头无条件 `btn_load.setEnabled(True)`，
+进度也走这条路 → **加载还没结束按钮就已可用**，能重复点击触发第二个 worker。
+
+**修法**：进度与终态分成两条信号。
+- `app/controller.py`：新增 `engine_progress = pyqtSignal(str)`，进度接它，`engine_status` 只留终态
+- `ui/widgets/model_panel.py`：新增 `set_progress(msg)`（橙字「● 加载中… …」，**不放开按钮**）；`_on_load` 改为调用它
+- `ui/main_window.py`：`controller.engine_progress.connect(model_panel.set_progress)`
+
+**实测（离屏，三用例，全过）**：
+```
+成功路径  [0] ● 加载中… 加载识别模型 PP-OCRv6_small_rec …
+          [1] ● 加载中… 加载方向模型 PP-LCNet_x1_0_textline_ori …
+          [2] ● 已加载                      判定 OK
+失败路径  [0] ● 加载中… 加载识别模型 PP-OCRv6_small_rec …
+          [1] ● 加载失败: 模型不存在：PP-OCRv6_small_rec    判定 OK（失败仍能报出原因）
+真实路径  [0] ● 加载中…  [1][2] 两个模型  [3] ● 已加载      判定 OK
+加载中按钮全程保持禁用
+```
+
 ---
 
 ## 9. 【未验证】的部分 —— 别当成已完成
@@ -452,7 +488,7 @@ engine_status: ok=True   msg=模型已加载
 - `DecisionMaker.decide` 的 1/0 判定
 - `OcrPipeline.run_on_image` 的端到端结果
 - 所有 `infra/` 串口、图源、CSV 的实际读写
-- 全部 GUI 交互（只验证了「能构造出来」，没点过任何按钮）
+- 全部 GUI 交互（只点过「加载模型」按钮，其余按钮没点过）
 - `test/test_rename.py` 的重命名行为
 
 **所以：「一到四已修复」可以担保；「整条链路正确」不能担保。**
