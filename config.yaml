@@ -1,0 +1,46 @@
+app:
+  log_dir: "./logs"
+  csv_output: "./logs/results.csv"
+  save_csv: true
+
+target:
+  numbers: ["12", "19", "20", "25", "37", "41", "43"]
+  valid_min: 1
+  valid_max: 48
+
+models:
+  rec_options:
+    - "PP-OCRv6_small_rec"
+    - "PP-OCRv6_medium_rec"
+    - "PP-OCRv5_server_rec"
+  ori_options:
+    - "PP-LCNet_x1_0_textline_ori"
+  default_rec: "PP-OCRv6_small_rec"
+  default_ori: "PP-LCNet_x1_0_textline_ori"
+
+recognizer:
+  conf_threshold: 0.6
+  early_exit_conf: 0.98
+  angles: [-90, -60, -45, -30, 0, 30, 45, 60, 90, 180]
+  drop_zero: true
+
+preprocess:
+  roi_size: 116
+  scale: 1.0
+  clahe_clip: 2.0
+  clahe_grid: [8, 8]
+  min_radius: 20
+  max_radius: 200
+
+source:
+  type: "folder"
+  folder_path: ""
+  camera_index: 0
+  fps: 15
+  poll_interval_ms: 300
+  loop: true
+
+serial:
+  baudrate: 115200
+  last_port: "COM3"
+  send_on_change_only: false

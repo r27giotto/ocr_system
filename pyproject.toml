@@ -1,0 +1,13 @@
+[project]
+name = "ocr-system"
+version = "0.1.0"
+description = "Add your description here"
+requires-python = ">=3.12"
+dependencies = [
+    "numpy>=2.5.4",
+    "opencv-python>=5.0.0.93",
+    "paddlepaddle>=3.3.1",
+    "paddlex>=3.4.3",
+    "pyqt6>=6.11.0",
+    "pyserial>=3.5",
+]
