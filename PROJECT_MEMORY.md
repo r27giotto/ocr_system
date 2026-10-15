@@ -88,16 +88,18 @@ No module named pip        (退出码 1)
 ### 已安装版本 【已实测】
 
 ```
-paddlepaddle       3.3.1        ← 能 import，OK
-paddlex            3.4.3
-numpy              2.5.4
-opencv-python      5.0.0.93
-PyQt6              6.11.0
-pyserial           3.5
-PyYAML             6.0.2
-pandas             3.0.6
-Pillow             12.3.0
-paddleocr          -- 未安装 --   (不需要，我们直接用 paddlex)
+paddlepaddle            3.3.1        ← 能 import，OK
+paddlex                 3.7.2        ← 必须 >=3.7.2，见第 8 节
+numpy                   2.3.5        ← paddlex 3.7.2 要求 numpy<2.4
+opencv-contrib-python   5.0.0.93     ← 必须是 contrib 版，见第 8 节
+pypdfium2               5.14.0
+python-bidi             0.6.11
+PyQt6                   6.11.0
+pyserial                3.5
+PyYAML                  6.0.2
+pandas                  3.0.6
+Pillow                  12.3.0
+paddleocr               -- 未安装 --   (不需要，我们直接用 paddlex)
 ```
 
 > 历史备注：早期排查时 `paddlepaddle` **不在** `pyproject.toml` 也不在 venv 里，`import paddle` 直接
@@ -112,8 +114,14 @@ paddleocr          -- 未安装 --   (不需要，我们直接用 paddlex)
 ```toml
 requires-python = ">=3.12"
 dependencies = [
-    "numpy>=2.5.4", "opencv-python>=5.0.0.93", "paddlepaddle>=3.3.1",
-    "paddlex>=3.4.3", "pyqt6>=6.11.0", "pyserial>=3.5",
+    "numpy>=2.3.5",                      # 不能写 >=2.5.4：paddlex 3.7.2 要求 numpy<2.4
+    "opencv-contrib-python>=5.0.0.93",   # 不是 opencv-python，见第 8 节
+    "paddlepaddle>=3.3.1",
+    "paddlex>=3.7.2",                    # 3.4.3 的注册表里没有 PP-OCRv6_*
+    "pypdfium2>=5.14.0",                 # paddlex 只在 extras 里声明，裸装必缺
+    "python-bidi>=0.6.11",               # 同上
+    "pyqt6>=6.11.0",
+    "pyserial>=3.5",
 ]
 ```
 
@@ -134,7 +142,7 @@ dependencies = [
 
 ### 其他
 
-- **不是 git 仓库**（没有版本控制，改动无法回滚，谨慎）
+- **已是 git 仓库**（分支 `main`；初始化与提交见第 12 节时间线）
 - `logs/` 已存在：`results.csv` 只有 1 行（表头）、`app.log` 空
 - `resources/icons/` 存在但**是空的**
 - 存在 `.idea/`（PyCharm 工程）
@@ -309,41 +317,77 @@ AppController + MainWindow(真配置)        构造成功，标题 "OCR 识别�
 
 ---
 
-## 8. ★ 当前唯一阻塞项：模型目录被 OS 权限挡住
+## 8. ✅ 已解决：模型加载失败（用户报的「点加载模型显示加载失败」）
 
-**这挡死了端到端运行**，`EngineManager.get_rec/get_ori` 一旦 `create_model()` 就会抛异常。
+用户报告：运行 `test/run_app.py`，点「加载模型」→ 界面 **加载失败**，控制台反复刷
+`Model files already exist. Using cached files. To redownload, please delete the directory manually: ...PP-OCRv6_small_rec`。
 
-【已实测】故障表现：
+### 8.1 曾经的两个误判（**已推翻，别再往这两个方向查**）
+
+- ❌ **不是 OS 级 ACL 损坏。**
+  当时只在 DSH 受限会话里测，看到 `PermissionError [WinError 5] 拒绝访问` 就下了「目录 ACL 坏了」的结论。
+  【已实测】去掉沙箱重跑同一段读取代码：**15 个模型目录全部可读**，`PP-OCRv6_small_rec` 里 5 个文件齐全，`.paddlex` 也可写。
+  → 那是 **DSH 沙箱**在挡沙箱外路径（沙箱进程的令牌拿不到那些目录的 ACE，只有继承未被打断的
+  `PP-LCNet_x1_0_doc_ori` 恰好能读）。**模型文件从来没有损坏过。**
+  判定方法（可复用）：**同一个读操作，加 `danger-full-access` 再跑一次**。能读 → 是沙箱；仍不能读 → 才是 OS ACL。
+- ❌ **不是 paddlex 下载失败。**「Model files already exist」只是说明走了本地缓存，是噪音不是错误。
+
+### 8.2 真正的四个原因（缺一不可，均已修复）
+
+| # | 缺什么 | 报错 |
+|---|---|---|
+| ① | `pypdfium2` | `DependencyError: PDFReaderBackend is not ready for use ... pypdfium2` |
+| ② | `opencv-contrib-python` | 同上一条。**`opencv-python` 不算数**：paddlex 检查的是 `opencv-contrib-python` 这个**发行版名**（`readers.py:27` 也是从 contrib 导入 cv2） |
+| ③ | `paddlex` 版本太旧（3.4.3） | `ClassNotFoundException: PP-OCRv6_small_rec is not registered on BasePredictor` —— 3.4.3 的注册表只有 v5 及更早；`configs/modules/text_recognition/PP-OCRv6_small_rec.yaml` 是 3.7.2 才有的 |
+| ④ | `python-bidi` | `DependencyError: TextRecRunnerPredictor is not ready for use ... python-bidi`（v6 走 runner 推理器） |
+
+关键：①②④ 这三样 paddlex **只在 extras（`cv` / `ocr-core` / `ocr` / `base`）里声明**，
+所以 `dependencies` 里裸写 `"paddlex"` **必然缺**，必须自己列出来。
+
+触发点：`paddlex/inference/common/batch_sampler/image_batch_sampler.py:52`
+`self.pdf_reader = PDFReader(zoom=PDF_RENDER_SCALE)` 是**无条件**执行的，
+所以**任何** `create_model()` 都会先踩 ①②。
+
+### 8.3 修复动作（已执行并验证）
+
 ```
-os.listdir(r'C:\Users\14734\.paddlex\official_models\PP-LCNet_x1_0_textline_ori')
-  → PermissionError [WinError 5] 拒绝访问
-os.listdir(r'C:\Users\14734\.paddlex\official_models\PP-OCRv6_small_rec')
-  → PermissionError [WinError 5] 拒绝访问
+paddlex                3.4.3 → 3.7.2
+numpy                  2.5.4 → 2.3.5    # paddlex 3.7.2 要求 numpy<2.4（原约束不可能满足）
+opencv-python          移除             # 与 contrib 争抢同一个 cv2/ 目录，先装谁谁生效
++ opencv-contrib-python 5.0.0.93        # 与 opencv-python 同版本，是其超集
++ pypdfium2             5.14.0
++ python-bidi           0.6.11
 ```
-- `open('...\PP-LCNet_x1_0_textline_ori\inference.yml')` → `PermissionError [Errno 13]`
-- 但 `os.path.exists()` 对同一路径返回 **False**（stat 被静默拒绝）
-- **对照组**：`...\PP-LCNet_x1_0_doc_ori\.gitattributes` 可正常读取
+`pyproject.toml` 已同步、`uv lock` 已刷新（Resolved 66 packages）、`uv sync` 显示已一致。
 
-**诊断结论**：这是 **Windows 文件系统 ACL 问题（OS 级 `WinError 5`）**，
-**不是 DSH 沙箱限制**（沙箱会打印 `[sandbox: file access denied under workspace-write mode]`，此处没有）。
-只有这两个子目录被拒，同级的 `PP-LCNet_x1_0_doc_ori` 却正常 —— 典型的目录 ACL 损坏。
-
-**修复办法**（技能 `diagnose-windows-sandbox-acl`，一条命令诊断+修复，**须批准非受限执行**）：
-```powershell
-& '<skill目录>\scripts\diagnose-windows-sandbox-acl.ps1' `
-  -Path 'C:\Users\14734\.paddlex\official_models\PP-LCNet_x1_0_textline_ori' `
-  -AllowRoot 'C:\Users\14734\.paddlex\official_models' `
-  -Out '<持久且属于用户的目录>'
-exit $LASTEXITCODE
+【已实测】验收 —— 走 **GUI 真实链路**（`AppController.load_models` → `EngineLoadWorker` → `EngineManager`）：
 ```
-一次只传一个路径，两个坏目录要跑两次。`-Out` 要选持久目录（**不能**用技能资源目录，它卸载即删）。
-**修完后必须再受限地重跑原失败操作**验证。
+engine_status: ok=False  msg=正在加载识别模型 PP-OCRv6_small_rec …
+engine_status: ok=False  msg=正在加载方向模型 PP-LCNet_x1_0_textline_ori …
+engine_status: ok=True   msg=模型已加载
+```
+另单独验证：`create_model('PP-OCRv6_small_rec')` OK 1.6s、`create_model('PP-LCNet_x1_0_textline_ori')` OK 0.3s。
+
+### 8.4 顺手修掉的两个「诊断障碍」（这才是当初看不懂的原因）
+
+- `ui/widgets/model_panel.py:55` 原本是 `msg[:30]` —— **把真实异常截断了**，所以界面上只剩「加载失败」。
+  现改为：标签显示异常**最后一行**，完整内容放 **tooltip**。
+- `app/workers.py` 的 `except` 只有 `str(e)`，现加 `traceback.print_exc()`，完整堆栈进控制台。
+
+### 8.5 遗留的环境限制（**不是代码 bug，别去修代码**）
+
+- DSH 沙箱下读不到 `C:\Users\14734\.paddlex` → **在受沙箱限制的会话里跑不通模型加载**；
+  用户自己的终端不受此限制。
+- 沙箱下 `.venv` 是**只读**的，`uv pip install` 会 `Failed to create directory ... 拒绝访问`，
+  装包必须用一次性非受限执行。
+- uv 默认缓存在 `C:\Users\14734\AppData\Local\uv\cache` 同样被拒，
+  需把 `UV_CACHE_DIR` 指到工作区内（本项目用 `.uv-cache/`，已加入 `.gitignore`）。
 
 ---
 
 ## 9. 【未验证】的部分 —— 别当成已完成
 
-以下**只在 import / 构造层面验证过，从未真正执行**（因为一执行就要加载模型，卡在第 8 节）：
+以下**只在 import / 构造层面验证过，从未真正执行**（第 8 节的模型加载问题已解决，但**还没灌过一帧真实图像**）：
 
 - `EngineManager` 的模型缓存是否真的只加载一次
 - `Recognizer.recognize` 的角度循环、方向分类转 180°、早退逻辑是否正确
@@ -359,9 +403,13 @@ exit $LASTEXITCODE
 
 ## 10. 下一步
 
-1. **修第 8 节的模型目录权限** → 然后跑通单帧端到端，才能验证第 9 节的算法（**优先级最高**）
+1. **灌一帧真实图像跑通单帧端到端** → 才能验证第 9 节的算法（第 8 节的依赖阻塞已解除，现在做得到）
+   - 最省事的入口：`test/test_ocr2.py` 里有 11 张真实样张（`E:\Python Project\project_0\data\test3`）
+   - 验完这一条，第 9 节才能划掉
 2. 再决定要不要清掉第 7 节的 ①–⑧ 待修缺陷
-3. `/brainstorming` 的设计文档**始终没写**（用户 m00043 发起）—— 系统已经写出来了，文档还欠着
+3. 设计文档已写成 `docs/superpowers/specs/2026-10-15-ocr-system-design.md`（约 31 KB / 14 节）
+   —— 但它**还没定稿交付**：`/brainstorming` 的 builder-check 提出 8 个问题，
+   其中 6 个（Q1–Q6）需要用户裁定后才能更新文档并正式移交。文档 §12 有那张问题表。
 4. 串口报文格式仍需用户拍板（见第 2 节）
 
 ---
@@ -405,3 +453,12 @@ $env:PADDLE_PDX_DISABLE_MODEL_SOURCE_CHECK = 'True'
 | m00172 | 用户：「先修复一到四」 |
 | — | 一到四 + 一处 import 卫生修复完成，全部实测通过 |
 | m00228 | 用户：「你先生成一个存放记忆的md文件在项目目录下」→ **本文件** |
+| m00299 | 用户：「生成一个设计文档md」→ `docs/superpowers/specs/2026-10-15-ocr-system-design.md`（14 节）；builder-check 返回 8 问（Q1–Q6 待用户裁定） |
+| m00370 | 用户：「创建git本地仓库然后提交」→ 提交 `ca39316`（38 文件，含 .gitignore/.gitattributes/logs/.gitkeep） |
+| m00392 | 用户：「在test目录下生成一个脚本，运行这个脚本能够启动这个项目用于测试」→ `test/run_app.py`（334 行），提交 `969cac3` |
+| m00435 | 用户报告：点「加载模型」显示加载失败，控制台刷 `Model files already exist ... PP-OCRv6_small_rec` |
+| — | **一度误判为「OS 级 ACL 损坏」**；随后用「同一读操作 + `danger-full-access` 重跑」推翻：15 个模型目录全部可读 → 是 DSH 沙箱，模型文件从未损坏 |
+| — | 真根因共四条：paddlex 只在 extras 里声明 `opencv-contrib-python` / `pypdfium2` / `python-bidi`；且 paddlex 3.4.3 的注册表里**根本没有 `PP-OCRv6_*`** |
+| — | 修复：paddlex 3.7.2、numpy 2.3.5、opencv-contrib-python 5.0.0.93（移除 opencv-python）、pypdfium2 5.14.0、python-bidi 0.6.11；`uv.lock` 已刷新 |
+| — | 顺手修掉两处「诊断障碍」：`model_panel.py` 的 `msg[:30]` 截断、`workers.py` 只打印 `str(e)` 无堆栈 |
+| — | 【已实测】走 GUI 真实链路 `AppController.load_models` → `engine_status: ok=True 模型已加载`；第 8 节据此重写为本文件当前内容 |

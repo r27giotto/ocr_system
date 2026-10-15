@@ -1,4 +1,6 @@
 import queue
+import traceback
+
 from PyQt6.QtCore import QThread, pyqtSignal
 
 from core.pipeline import OcrPipeline
@@ -20,6 +22,9 @@ class EngineLoadWorker(QThread):
             self.engine.get_ori(self.ori_name, self.progress.emit)
             self.done.emit(True, "模型已加载")
         except Exception as e:
+            # 完整堆栈必须打到控制台：界面标签放不下，
+            # 「加载失败」若只有一行摘要会让人无从下手。
+            traceback.print_exc()
             self.done.emit(False, str(e))
 
 

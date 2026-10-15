@@ -50,7 +50,13 @@ class ModelPanel(QGroupBox):
         self.btn_load.setEnabled(True)
         if ok:
             self.status_label.setText("● 已加载")
+            self.status_label.setToolTip("")
             self.status_label.setStyleSheet("color: green;")
         else:
-            self.status_label.setText(f"● 加载失败: {msg[:30]}")
+            # 标签只放异常最后一行，完整内容进 tooltip；
+            # 原来写 msg[:30] 会把真正的原因截掉，导致只看到「加载失败」。
+            full = msg.strip()
+            brief = full.splitlines()[-1] if full else "未知错误"
+            self.status_label.setText(f"● 加载失败: {brief[:60]}")
+            self.status_label.setToolTip(full)
             self.status_label.setStyleSheet("color: red;")
