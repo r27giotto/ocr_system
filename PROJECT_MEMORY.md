@@ -175,7 +175,7 @@ models:     rec_options: [PP-OCRv6_small_rec, PP-OCRv6_medium_rec, PP-OCRv5_serv
             ori_options: [PP-LCNet_x1_0_textline_ori]
             default_rec: PP-OCRv6_small_rec   default_ori: PP-LCNet_x1_0_textline_ori
 recognizer: conf_threshold: 0.6   early_exit_conf: 0.98
-            angles: [-90,-60,-45,-30,0,30,45,60,90,180]   drop_zero: true
+            angles: [-90,-60,-30,0,30,60,90,180]   drop_zero: true
 preprocess: roi_size: 116   scale: 1.0   clahe_clip: 2.0   clahe_grid: [8,8]
             min_radius: 20   max_radius: 200
 source:     type: "folder"   folder_path: ""   camera_index: 0   fps: 15
@@ -184,6 +184,11 @@ serial:     baudrate: 115200   last_port: "COM3"   send_on_change_only: false
 ```
 
 这些数值全部来自 `test/test_ocr2.py` 的常量，**是调优过的，不要随手改**。
+
+> ⚠️ 唯一的例外：`recognizer.angles`。这一项**已经改过**（用户指令 m00749「角度选择我需要每个10度都有」）：
+> 面板现在提供 **-180°~180° 每 10° 一个、共 37 个**复选框，`config.yaml` 里那一行只是
+> 「启动时默认勾选」的**子集**，所以原来不在 10° 网格上的 `-45` / `45` 被去掉了
+> （`AnglePanel.__init__` 会把不在网格上的值丢掉并打印一行提示）。
 
 ---
 
@@ -277,9 +282,11 @@ demo 用的样张目录：E:\Python Project\project_0\data\test3   （11 张图�
 | `infra/csv_logger.py` | 39 | CSV 记录 | ⚠️ **有截断缺陷，见缺陷①** |
 | `app/controller.py` | — | `AppController`（编排层） | ⚠️ 仅构造验证 |
 | `app/workers.py` | — | `EngineLoadWorker` / `InferenceWorker`（QThread） | ⚠️ 仅 import 验证 |
-| `ui/main_window.py` | — | 主窗口，组装七个面板 | ⚠️ 仅构造验证 |
+| `ui/main_window.py` | 178 | 主窗口，组装七个面板；竖直 `QSplitter` 分隔历史区，右列包 `QScrollArea` | ✅ 已实测（见 §6.1） |
 | `ui/overlay.py` | — | 画框 + 结果叠加 | ⚠️ 仅 import 验证 |
-| `ui/widgets/*.py` | — | 七个面板 | ⚠️ 仅 import 验证 |
+| `ui/widgets/angle_panel.py` | 95 | 37 个角度复选框（10° 网格）+ 全选/仅 0°/反选/默认 | ✅ 已实测 |
+| `ui/widgets/history_panel.py` | 168 | 历史缩略图，高度自适应 + 清除按钮 | ✅ 已实测 |
+| `ui/widgets/*.py`（其余五个） | — | 模型/源/结果/串口/图像面板 | ⚠️ 仅 import 验证 |
 
 `core/models.py` 的 `RecognitionResult` 字段（写代码时对齐这个）：
 ```python
@@ -292,6 +299,32 @@ frame: Optional[np.ndarray] = None                   # 存整帧，见缺陷⑦
 error_msg: str = ""
 @property ok -> status == "ok"
 ```
+
+### 6.1 界面布局（m00749 改动后，已实测）
+
+```
+QVBoxLayout(centralWidget) 实际上已被替换为：
+  v_splitter (竖直 QSplitter)
+  ├── splitter (横向 QSplitter, 3:1)
+  │   ├── ImageView
+  │   └── right_scroll (QScrollArea)
+  │       └── right QWidget：ModelPanel + SourcePanel + AnglePanel
+  │                          + ResultPanel + SerialPanel + addStretch
+  └── HistoryPanel          ← 拖动这个分隔条即可动态调节历史区高度
+```
+
+- 历史缩略图**不再是固定 190px**：`HistoryPanel.resizeEvent` 触发 120ms 防抖的
+  `_apply_thumb_height()`，按 `scroll.viewport().height()-10` 重新下发高度，
+  夹在 `[56, 240]`；`HistoryItem._render_thumb()` 用 `np.zeros` 画布**等比**缩放，
+  不是拉伸（所以窄高比例下会有黑边，属正常）。
+- 「清除历史」按钮 → `HistoryPanel.clear()` + 发 `cleared` 信号 →
+  `MainWindow._on_history_cleared()` 把状态栏统计一并归零。
+- ⚠️ **布局陷阱（踩过一次）**：37 个角度复选框把右侧那列的
+  `minimumSizeHint().height()` 顶到约 890px，竖直分割器会把空间全给它、
+  历史区被压到最小 120px 且**拖不动**（`setSizes` 被最小高度钳住）。
+  修法是把右列包进 `QScrollArea`，且**必须**把它的最小宽度显式设为
+  `right.minimumSizeHint().width() + 竖向滚动条宽度`——`QScrollArea` 自己算的最小宽度
+  不含内部控件的要求，否则外侧会把右列压窄到内容以下、把控件裁掉。
 
 ---
 
@@ -485,3 +518,5 @@ $env:PADDLE_PDX_DISABLE_MODEL_SOURCE_CHECK = 'True'
 | — | 顺手修掉两处「诊断障碍」：`model_panel.py` 的 `msg[:30]` 截断、`workers.py` 只打印 `str(e)` 无堆栈 |
 | — | 【已实测】走 GUI 真实链路 `AppController.load_models` → `engine_status: ok=True 模型已加载`；第 8 节据此重写为本文件当前内容 |
 | m00641 | 用户：「能不能将所有模型都放在项目目录内，然后直接读取」→ 15 个模型目录（477.1 MB）复制到 `models/official_models/`；`main.py` + `test/run_app.py` 设 `PADDLE_PDX_CACHE_HOME`；`models/` 加 gitignore；`--check` 从 2 个 WARN 变成全部通过 |
+| m00749 | 用户：「历史模块添加动态调节高度，以及清除历史按钮和功能，角度选择我需要每个10度都有」→ ① `HistoryPanel` 去掉固定 190px，缩略图随高度等比重缩放（56~240）② 新增「清除历史」按钮 + `cleared` 信号，状态栏统计一并归零 ③ `AnglePanel` 改为 -180°~180° 每 10° 共 37 个复选框（原 10 个）④ `main_window` 历史区改放进竖直 `QSplitter`，右列包 `QScrollArea`（否则 37 个复选框把历史区压死）⑤ `config.yaml` 的 `angles` 去掉不在网格上的 -45/45 |
+| — | 【已实测】`_verify_ui.py` 离屏验收：37 个角度框、全选=37、默认=8；历史区 195→394→120px 时缩略图 126→240→56px；清除后计数归 0、状态栏统计归零、再追加正常；`compileall` 退出码 0；`test/run_app.py` 真实启动 22 秒仍存活无异常 |

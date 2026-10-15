@@ -1,6 +1,6 @@
 from PyQt6.QtWidgets import (
     QMainWindow, QWidget, QHBoxLayout, QVBoxLayout, QSplitter,
-    QLabel, QStatusBar, QMessageBox
+    QLabel, QStatusBar, QMessageBox, QScrollArea, QFrame
 )
 from PyQt6.QtCore import Qt, QTimer
 
@@ -47,21 +47,49 @@ class MainWindow(QMainWindow):
         right_layout.addWidget(self.serial_panel)
         right_layout.addStretch()
 
+        # 右列包一层滚动区。37 个角度复选框让这一列的「最小高度」涨到 ~890px，
+        # 会把竖直分割器的空间全占掉、底部历史区被压到最小且拖不大；
+        # 放进滚动区后右列可以被压扁（拥挤时自己出滚动条），历史区才能自由调高。
+        right_scroll = QScrollArea()
+        right_scroll.setWidgetResizable(True)
+        right_scroll.setFrameShape(QFrame.Shape.NoFrame)
+        # 横向条只在「真的被拖得比内容还窄」时出现（正常不会出现）：
+        # QScrollArea 自己算出来的最小宽度不含内部控件的要求，会被分割器压到
+        # 内容宽以下、把右侧控件裁掉，所以这里显式把它顶到内容的实际最小宽度。
+        right_scroll.setHorizontalScrollBarPolicy(
+            Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        right_scroll.setWidget(right)
+        right_layout.activate()
+        # 再加上竖向滚动条的宽度：否则「内容最小宽」会被滚动条吃掉十几个像素，
+        # 结果又冒出一条横向滚动条。
+        right_scroll.setMinimumWidth(
+            max(360,
+                right.minimumSizeHint().width()
+                + right_scroll.verticalScrollBar().sizeHint().width()))
+        self.right_scroll = right_scroll
+        self.right_widget = right
+
         # ---- 主分割器 ----
         splitter = QSplitter(Qt.Orientation.Horizontal)
         splitter.addWidget(self.image_view)
-        splitter.addWidget(right)
+        splitter.addWidget(right_scroll)
         splitter.setStretchFactor(0, 3)
         splitter.setStretchFactor(1, 1)
 
         # ---- 底部：历史缩略图 ----
+        # 放进竖直 QSplitter，用户可以直接拖动分隔条动态调节历史区高度；
+        # 历史缩略图本身也会跟着高度重新缩放（见 HistoryPanel.resizeEvent）。
         self.history_panel = HistoryPanel()
 
-        central = QWidget()
-        v = QVBoxLayout(central)
-        v.addWidget(splitter, 1)
-        v.addWidget(self.history_panel, 0)
-        self.setCentralWidget(central)
+        self.v_splitter = QSplitter(Qt.Orientation.Vertical)
+        self.v_splitter.addWidget(splitter)
+        self.v_splitter.addWidget(self.history_panel)
+        self.v_splitter.setStretchFactor(0, 4)
+        self.v_splitter.setStretchFactor(1, 1)
+        self.v_splitter.setCollapsible(0, False)
+        self.v_splitter.setCollapsible(1, False)
+        self.v_splitter.setSizes([660, 190])
+        self.setCentralWidget(self.v_splitter)
 
         # ---- 状态栏 ----
         self.status_bar = QStatusBar()
@@ -103,6 +131,9 @@ class MainWindow(QMainWindow):
         # 历史项点击 → 主图区回看
         self.history_panel.item_clicked.connect(self._on_history_clicked)
 
+        # 清除历史
+        self.history_panel.cleared.connect(self._on_history_cleared)
+
     def _on_result(self, res):
         self.image_view.set_result(res)
         self.result_panel.update_result(res)
@@ -133,6 +164,13 @@ class MainWindow(QMainWindow):
 
     def _on_history_clicked(self, res):
         self.image_view.set_result(res, keep_frame=True)
+
+    def _on_history_cleared(self):
+        """清除历史时，把状态栏的累计统计一起归零（否则空历史配着
+        「已处理 128」看起来像 bug）。串口已发送/错误计数不在这里，
+        它属于串口面板自己的统计。"""
+        self._stats = {"total": 0, "hit": 0, "sum_ms": 0.0}
+        self._update_status()
 
     def _update_status(self, res=None):
         s = self._stats
