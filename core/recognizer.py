@@ -10,7 +10,7 @@ from core.preprocess import Preprocessor
 
 @dataclass
 class RecognizerConfig:
-    angles: Tuple[int, ...] = (-90, -60, -45, -30, 0, 30, 45, 60, 90, 180)
+    angles: Tuple[int, ...] = (-90, -60, -30, 0, 30, 60, 90, 180)
     conf_threshold: float = 0.6
     early_exit_conf: float = 0.98
     valid_min: int = 1
