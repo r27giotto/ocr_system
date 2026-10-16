@@ -9,19 +9,30 @@ from core.preprocess import Preprocessor
 
 # 单个候选进入聚合池的门槛。低于它的识别结果直接丢掉，
 # 不参与投票 —— 这一步只做「准入」，不做「择优」。
+# 它同时还当「噪声底」用：聚合时每张票只按 (score - 这个值) 计入证据，
+# 见 _aggregate_by_number。
 CONF_THRESHOLD = 0.5
 
 
-def _aggregate_by_number(candidates):
+def _aggregate_by_number(candidates, threshold=CONF_THRESHOLD):
     """按数字把候选分组聚合。
 
     candidates: [(text, score, angle), ...]
     返回按 [聚合分, 最高分, 票数] 降序排序的列表：
         [(num, agg_score, max_score, votes), ...]
 
-    聚合分 = 同一个数字所有有效票的置信度之和。所以「很多个角度都认出同一个
-    数字」会累加，比「某一个角度偶然蒙出高分」更靠前 —— 这正是多角度扫描想要
-    的性质：互为佐证的一堆中等分，胜过一次孤立的高分。
+    聚合分 = Σ(score - threshold)，即每张票**高出准入门槛的那部分**之和。
+
+    为什么不是简单的 Σscore：Σscore 奖励的是「票数」，不看票的强弱，
+    于是「3 张勉强及格的弱票」会压过「2 张 0.9997 的强票」——
+    实测 `project_0\\data\\test3\\20.png` 就是这样被判成 '2' 的
+    （'2': 3 票 0.7407/0.7465/0.5999 = 2.0871，'
+     20': 2 票 0.9997/0.9993 = 1.9990）。减去噪声底后：
+    '2' = 0.5871 vs '20' = 0.9990，正确答案胜出。
+
+    减去 threshold 的效果：弱票几乎不贡献证据，强票贡献很多，
+    同时仍然保留「多角度互证」的性质 —— 两张 0.8 的票
+    （0.3+0.3=0.6）依然胜过一次 0.9 的票（0.4）。
     """
     groups: Dict[str, List[float]] = {}   # num -> [scores...]
     for text, score, angle in candidates:
@@ -29,7 +40,10 @@ def _aggregate_by_number(candidates):
 
     stats = []
     for num, scores in groups.items():
-        agg = sum(scores)                        # 聚合分
+        # 聚合分：只累计高出准入门槛的部分（准入保证每项 >= 0）。
+        # 四舍五入到 6 位去掉浮点尾差 —— 否则「边际分相同 → 比票数」这一级
+        # 会被 1e-16 的误差抢先决定（0.9+0.9-1.0 与 0.9+0.7+0.7-1.5 本是同一个数）。
+        agg = round(sum(s - threshold for s in scores), 6)
         max_s = max(scores)                      # 最高单次分
         votes = len(scores)                      # 有效票数
         stats.append((num, agg, max_s, votes))
@@ -117,11 +131,11 @@ class Recognizer:
         if not candidates:
             return None
 
-        stats = _aggregate_by_number(candidates)
+        stats = _aggregate_by_number(candidates, self.cfg.conf_threshold)
 
         if self.cfg.debug_aggregate:
             for num, agg, mx, cnt in stats:
-                print(f"    [聚合] {num!r}: sum={agg:.4f}  "
+                print(f"    [聚合] {num!r}: margin={agg:.4f}  "
                       f"max={mx:.4f}  votes={cnt}")
 
         # 取第一个（聚合分最高的）且落在有效范围内的数字
