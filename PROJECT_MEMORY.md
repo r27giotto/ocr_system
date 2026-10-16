@@ -174,7 +174,8 @@ target:     numbers: ["12","19","20","25","37","41","43"]   valid_min: 1   valid
 models:     rec_options: [PP-OCRv6_small_rec, PP-OCRv6_medium_rec, PP-OCRv5_server_rec]
             ori_options: [PP-LCNet_x1_0_textline_ori]
             default_rec: PP-OCRv6_small_rec   default_ori: PP-LCNet_x1_0_textline_ori
-recognizer: conf_threshold: 0.6   early_exit_conf: 0.98
+recognizer: conf_threshold: 0.5   debug_aggregate: true
+            early_exit_conf: 0.98 ← 【已废弃，不再被读取】
             angles: [-90,-60,-30,0,30,60,90,180]   drop_zero: true
 preprocess: roi_size: 116   scale: 1.0   clahe_clip: 2.0   clahe_grid: [8,8]
             min_radius: 20   max_radius: 200
@@ -248,20 +249,72 @@ angle == 0  → 直接用原 ROI，不旋转不缩放
 ### 5.3 识别与判定
 
 ```
-对每个变体：
+对每个变体（跑完全部角度，不早退）：
     ori.predict([img]) → parse_ori_output
         若 == 1（倒置）→ cv2.rotate(img, ROTATE_180)
     rec.predict([fixed]) → parse_rec_output → [(text, score)]
-    过滤：score < conf_threshold(0.6) 丢弃
+    过滤：score < conf_threshold(0.5) 丢弃          ← 只做「准入」
           text 只保留数字字符，空了丢弃
           drop_zero 且结果 == "0" 丢弃
     记录候选 (cleaned, score, angle)
-    早退：仅当 angle == 0 且 score >= early_exit_conf(0.98) 且数字 ∈ [1,48] → 立即返回
-全部候选按 score 降序 → 返回第一个数字 ∈ [valid_min, valid_max] 的
+
+跑完全部角度后，按数字分组聚合（_aggregate_by_number）：
+    每个数字 → agg = Σscore, max = 最高单次分, votes = 票数
+    按 (agg, max, votes) 三元组降序排
+取第一个数字 ∈ [valid_min, valid_max] 的；
+返回它在所有票里置信度最高的那次 (num, score, angle)
 都不满足 → None
 ```
 
-**注意早退条件绑死了 `angle == 0`** —— 非 0° 角度即使 0.99 也不会早退。
+**★ 为什么「聚合分」比「单次最高分」好**：同一个数字被越多角度认出来，
+说明它不是某个角度的偶然误读。聚合分把「多个角度的互相佐证」累加起来，
+所以「3 个角度都认出 12，各 0.99/0.99/0.996」会赢过「某一个角度蒙出 0.995 的 2」。
+只按最高分取，等于把 4 张票里 3 张的结论丢掉。
+
+**★ 早退已删除（2026-10-16）**：旧版「`angle == 0` 且 score ≥ 0.98 就立即返回」
+已被移除 —— 聚合分靠各角度的票累加，早退等于放弃后面的票，聚合就失去意义。
+代价是每帧都要跑满全部角度（速度已明确不在本项目范围内）。
+
+**平局规则**：聚合分相同 → 比最高单次分；再相同 → 比票数。
+`best_angle` 取该数字所有票里置信度最高的那一次的角度（并列时取先遇到的，
+即 `|angle|` 更小的）。
+
+真实数据佐证（`_verify_agg.py`，阈值 0.5，默认 8 个角度）：
+`project_0\data\test3\12.png` → 聚合 `12: sum=2.9920 max=0.9995 votes=3`、
+`2: sum=0.9918 votes=1` → 返回 `('12', 0.9995, 0°)`；
+`37.png` → `37: sum=0.9788 votes=1`（**只有 -30° 这一次认出来了**）→ `('37', 0.9788, -30°)`。
+
+### ⚠️ 5.3.1 聚合分的已知失败模式（**真实数据实测，务必看**）
+
+`project_0\data\test3\20.png` 在端到端里被判成 **`2`**，而 demo（`test_ocr2.py`）读作 **`20`**，
+文件名本身就是当年按 `20` 重命名的 —— 即**这是聚合规则引入的真实回归**。逐角度原始票：
+
+| 角度 | ori | 模型原样输出 | 分数 | 是否进池 |
+|---|---|---|---|---|
+| 0° | 0 | `'2'` | 0.7407 | 进 |
+| -30° | 0 | `'6'` | 0.1217 | 弃 |
+| 30° | 0 | `'2'` | 0.7465 | 进 |
+| -60° | 0 | `'00'` | 0.4035 | 弃 |
+| 60° | 1 | `'00'` | 0.5312 | 进 |
+| **-90°** | 1 | **`'20'`** | **0.9997** | 进 |
+| **90°** | 1 | **`'20'`** | **0.9993** | 进 |
+| 180° | 1 | `'2'` | 0.5999 | 进 |
+
+聚合结果：`2 → sum=2.0871 votes=3` **>** `20 → sum=1.9990 votes=2` → 返回 `2`。
+
+**根因**：`agg = Σscore` 奖励的是**票数**，不区分票的强弱。
+三张 0.60~0.75 的**弱票**（都出现在零件并非正立的角度）合起来压过了两张 0.9997 的**强票**。
+即：**「很多次勉强认出」会赢过「两次几乎确定」** —— 这正是聚合分想解决的问题的反面。
+
+**可选修法（都只改排序键，不动收集逻辑）**：
+1. **边际分求和**（推荐）：`agg = Σ(score - conf_threshold)`，即只有高出噪声底的部分算证据。
+   上例：`2 → 0.5871` vs `20 → 0.9990` → **`20` 胜**。既保留「多角度互证」，
+   又让弱票几乎不贡献。
+2. **最高分优先、聚合分次之**：排序键改 `(max, agg, votes)` → `20` 胜，但这基本退回旧规则。
+3. **只让高分票进池**：把 `conf_threshold` 提高（如 0.9）→ `2` 的票全被拒，`20` 胜；
+   但会牺牲那些「只在某个角度勉强认出」的正确结果（如 `37.png` 只有一票 0.9788）。
+
+**当前状态：仍按用户给的 `Σscore` 跑，未擅自改。** 等用户裁定。
 
 ### 5.4 判定 1/0
 
@@ -277,9 +330,10 @@ number ∈ target_numbers({12,19,20,25,37,41,43})      → 1
 ### 5.5 关键常量（`config.yaml` 里的值都是从这里来的）
 
 ```
-TARGET_NUMBERS = {12,19,20,25,37,41,43}   CONF_THRESHOLD = 0.6
-ROI_SIZE = 116   SCALE = 1.0   EARLY_EXIT_CONF = 0.98   VALID 1..48
-ANGLES = (-90,-60,-45,-30,0,30,45,60,90,180)
+TARGET_NUMBERS = {12,19,20,25,37,41,43}   CONF_THRESHOLD = 0.5（2026-10-16 由 0.6 下调）
+ROI_SIZE = 116   SCALE = 1.0   VALID 1..48
+EARLY_EXIT_CONF = 0.98  ← 【已废弃】早退已删除，config 里的这个键不再被读取
+ANGLES = (-90,-60,-45,-30,0,30,45,60,90,180)  ← demo 的；本项目面板默认 (-90,-60,-30,0,30,60,90,180)
 环境（main.py 也照抄了）：OMP_NUM_THREADS=8, MKL_NUM_THREADS=8, cv2.setNumThreads(1)
 demo 用的样张目录：E:\Python Project\project_0\data\test3   （11 张图）
 ```
@@ -297,8 +351,8 @@ demo 用的样张目录：E:\Python Project\project_0\data\test3   （11 张图�
 | `core/preprocess.py` | 83 | `enhance` / `find_roi` / `rotate` / `build_variants` | ✅ 完整，**真实样张 11/11 通过** |
 | `core/engine.py` | 31 | `EngineManager`（按名缓存 + `threading.Lock`） | ⚠️ 未跑过 |
 | `core/decision.py` | 35 | `DecisionMaker.decide` → 1/0 | ⚠️ 未跑过 |
-| `core/recognizer.py` | 96 | `Recognizer.recognize` 多角度循环 + 早退 | ⚠️ 未跑过 |
-| `core/pipeline.py` | 57 | `OcrPipeline.run_on_image` 单帧端到端 | ⚠️ 未跑过 |
+| `core/recognizer.py` | 145 | `Recognizer.recognize` 多角度循环 + **`_aggregate_by_number` 按数字聚合分选结果**（无早退） | ✅ 已实测（真实样张，见 §5.3） |
+| `core/pipeline.py` | 57 | `OcrPipeline.run_on_image` 单帧端到端 | ✅ 已实测（真实模型 + 12 张真实样张，11/12 ok） |
 | `infra/image_source.py` | — | `FolderSource` / `CameraSource` | ⚠️ **依赖 Qt，见缺陷⑥** |
 | `infra/serial_service.py` | — | 简化版串口 | ⚠️ 未跑过 |
 | `infra/csv_logger.py` | 39 | CSV 记录 | ⚠️ **有截断缺陷，见缺陷①** |
@@ -550,30 +604,38 @@ self._load_worker.done.connect(self.engine_status.emit)
 
 ## 9. 【未验证】的部分 —— 别当成已完成
 
-以下**只在 import / 构造层面验证过，从未真正执行**（第 8 节的模型加载问题已解决，但**还没灌过一帧真实图像**）：
+**2026-10-16 更新：单帧端到端已跑通**（真实模型 + `project_0\data\test3` 的 12 张真实样张，
+走 `EngineManager → Preprocessor → Recognizer → DecisionMaker → OcrPipeline`，**11/12 张 `ok`**）。
+所以下面这些**已经不再是「从未执行」**：
 
-- `EngineManager` 的模型缓存是否真的只加载一次
-- `Recognizer.recognize` 的角度循环、方向分类转 180°、早退逻辑是否正确
-- `DecisionMaker.decide` 的 1/0 判定
-- `OcrPipeline.run_on_image` 的端到端结果
-- 所有 `infra/` 串口、图源、CSV 的实际读写
+- ✅ `EngineManager` 的模型缓存（同一次进程内只 `create_model` 一次）
+- ✅ `Recognizer.recognize` 的角度循环、方向分类转 180°、**聚合选果**（见 §5.3）
+- ✅ `DecisionMaker.decide` 的 1/0 判定（`hit` / `output_value` 实测一致）
+- ✅ `OcrPipeline.run_on_image` 的端到端结果（`status` / `number` / `confidence` / `angle` / `elapsed_ms` 全部有值）
+
+**仍然没验证过**：
+
+- 所有 `infra/` 串口、图源、CSV 的实际读写（没插过串口设备、没开过摄像头）
 - 全部 GUI 交互（只点过「加载模型」按钮，其余按钮没点过）
+- 实时视频流（只跑过离屏、单帧、静态样张）
 - `test/test_rename.py` 的重命名行为
 
-**所以：「一到四已修复」可以担保；「整条链路正确」不能担保。**
+**所以：「core/ 单帧链路正确」现在可以担保；「整条产品链路正确」仍不能担保。**
 
 ---
 
 ## 10. 下一步
 
-1. **灌一帧真实图像跑通单帧端到端** → 才能验证第 9 节的算法（第 8 节的依赖阻塞已解除，现在做得到）
-   - 最省事的入口：`test/test_ocr2.py` 里有 11 张真实样张（`E:\Python Project\project_0\data\test3`）
-   - 验完这一条，第 9 节才能划掉
-2. 再决定要不要清掉第 7 节的 ①–⑧ 待修缺陷
-3. 设计文档已写成 `docs/superpowers/specs/2026-10-15-ocr-system-design.md`（约 31 KB / 14 节）
+1. ~~灌一帧真实图像跑通单帧端到端~~ ✅ **已完成（2026-10-16）**，见 §9
+   - 实测：`E:\Python Project\project_0\data\test3` 12 张 → **11 张 ok、1 张 no_number**（`4.png`）
+   - 每张耗时约 225–240ms（首张 1925ms 含模型加载）；命中 6 张（12/19/25/37/41/43）
+   - ⚠️ 其中 `20.png` 被聚合法判成 **`2`**（demo 原本读作 `20`），**详见 §5.3 末尾的告警**
+2. 决定 `20.png` 这个回归怎么处理（改聚合键 / 恢复最高分优先 / 两者结合）
+3. 再决定要不要清掉第 7 节的 ①–⑧ 待修缺陷
+4. 设计文档已写成 `docs/superpowers/specs/2026-10-15-ocr-system-design.md`
    —— 但它**还没定稿交付**：`/brainstorming` 的 builder-check 提出 8 个问题，
-   其中 6 个（Q1–Q6）需要用户裁定后才能更新文档并正式移交。文档 §12 有那张问题表。
-4. 串口报文格式仍需用户拍板（见第 2 节）
+   其中 5 个（Q1/Q2/Q3/Q5/Q6）需要用户裁定后才能更新文档并正式移交。文档 §12 有那张问题表。
+5. 串口报文格式仍需用户拍板（见第 2 节）
 
 ---
 
@@ -642,3 +704,6 @@ $env:PADDLE_PDX_DISABLE_MODEL_SOURCE_CHECK = 'True'
 | — | 【已实测】`_verify_gn.py` 离屏验收 26 项全过：四类样本（良品 / 不良 / 没找到圆 / 没识别出数字）的 `output_text`、面板文字、面板底色、历史卡片文字与边框色；`output_value` 仍是 0/1 且 `output_text` 无 setter；叠层绿色像素 G 图 5430 > NG 图 0；`compileall` 退出码 0。截图确认 `NG` 在 80×80 方框内不被挤（两字降到 38px） |
 | m01529 | 用户（配角度面板截图）：「面板上10-170增加到5-175，步长为5，然后添加一个下拉选项，可以勾选步长为5,10,15,20,30（勾选的值就是180/5,180/10以此类推）」→ `AnglePanel` 重写为 263 行：`STEP_OPTIONS=(5,10,15,20,30)` + `DEFAULT_STEP=5` + `COLUMNS=5`；新增类方法 `rotation_angles(step) = list(range(step,180,step))`、属性 `step`；新增 `QComboBox`（文案 `步长 5°（180 ÷ 5 = 36 等分）` … `步长 30°（180 ÷ 30 = 6 等分）`）→ `_on_step_changed` 重建网格（`_rebuild_grid` + `_sync_labels`），**换步长时保留仍在新网格上的勾选、取消掉出网格的并打印提示**；「默认」按钮只复位勾选与负号、**不动步长**；负号与「全选」按钮的文案跟着网格范围/数量走 |
 | — | 【已实测】`_verify_angle3.py` 离屏验收 60 余项全过（含真实 `MainWindow`）：五档步长旋转格数 35/17/11/8/5、总数 37/19/13/10/7；下拉文案与数据 `[5,10,15,20,30]`；默认态 `[0,-30,30,-60,60,-90,90,180]`；config 旧值解析**逐位不变**；负号开关不影响 0°/180°；全选无负号 37 个 / 有负号 72 个；仅 0°→`[0]`、反选→空、默认→复位；步长 5→30 保留 30/60/90、5/25 被丢弃；批量与换步长各只发 1 次信号。面板最小尺寸 **430×250**（步长 5）/ 430×142（步长 30）；右列内容最小 **504×939**、视口 504×643、竖向滚动条有、横向无。`compileall` 退出码 0 |
+| m01626 | 用户贴出新的「结果输出逻辑」并要求整合进 `recognizer.py` → **`_aggregate_by_number(candidates)`**（按数字分组，`agg=Σscore / max=最高单次分 / votes=票数`，按 `(agg,max,votes)` 降序）+ `recognize()` 改为**跑完全部角度后按聚合分选结果**，返回该数字所有票里置信度最高的那次角度。**删除旧版的 `angle == 0 and score >= 0.98` 早退**（会丢票）；`CONF_THRESHOLD` 0.6 → **0.5**（只做准入）；新增 `debug_aggregate` 开关（config 里暂设 true）；`early_exit_conf` 保留字段但标注已废弃；`core/recognizer.py` 96 → 145 行 |
+| — | 【已实测】`_verify_agg.py`：T1–T11 用假引擎（`build_variants` 返回带角度标记的 5×5 图，中心像素 180° 旋转不变、角像素判是否被转）逐条验证聚合排序、聚合分/最高分/票数、**多角度互证胜过单次高分**（12×2 票胜 25×0.99）、**不再早退**（ori/rec 各调 3 次、角度集合正确）、阈值 0.499/0.5 边界、超范围跳过、丢 0、清洗非数字、方向分类转 180°（含 `label_names` 兜底）、平局三档规则、`best_angle` 取最高分那次、空候选 → None；T12 真实模型 + 真实样张：`12.png` → 聚合 `12: sum=2.9920 votes=3` 胜过 `2: 0.9918` → `('12', 0.9995, 0°)`；`37.png` → `37: sum=0.9788 votes=1`（**仅 -30° 认出**）→ `('37', 0.9788, -30°)`。`test/run_app.py --check` 全部通过；`compileall` 退出码 0 |
+| — | 【已实测】★ **单帧端到端首次跑通**（`_e2e.py`，真实模型走 `EngineManager → Preprocessor → Recognizer → DecisionMaker → OcrPipeline`，`project_0\data\test3` 12 张样张，默认 8 个角度）：**11/12 ok**、1 张 `no_number`（`4.png`）；命中 6 张（12/19/25/37/41/43）；成功耗时 224–239ms（首张 1925ms 含模型加载）；`hit` 与 `output_value` 完全对应（命中 → `1` → `NG`，未命中 → `0` → `G`，失败 → `?`）。**但 `20.png` 被判成 `2`（demo 读作 `20`）→ 见 §5.3.1 的聚合分失败模式告警** |

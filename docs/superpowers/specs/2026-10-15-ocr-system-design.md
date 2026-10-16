@@ -123,7 +123,7 @@ core/                   ★ 纯 Python 逻辑层，零 Qt 依赖
   preprocess.py         CLAHE 增强 / 定位圆形 ROI / 多角度旋转 / 生成变体
   parsers.py            解析 PaddleX 的返回（格式多变，需兼容）
   engine.py             EngineManager：按模型名缓存模型实例，带线程锁
-  recognizer.py         多角度识别主循环（角度遍历 + 方向分类 + 早退）
+  recognizer.py         多角度识别主循环（角度遍历 + 方向分类 + 按数字聚合分选结果）
   decision.py           DecisionMaker：数字 → 1/0
   pipeline.py           OcrPipeline：单帧端到端串联
 
@@ -176,9 +176,14 @@ InferenceWorker 线程 ──> OcrPipeline.run_on_image ──> RecognitionResul
 
 ---
 
-## 6. 核心算法（必须与 `test/test_ocr2.py` 一致）
+## 6. 核心算法
 
 > 这一节是本系统的技术核心。**改动前先跑 `test/test_ocr2.py` 对照。**
+>
+> ⚠️ **2026-10-16 起，本节与 demo 不再逐条等价**：§6.1 定位圆、§6.2 变体生成仍与
+> `test/test_ocr2.py` 完全一致；但 **§6.3 的识别选果逻辑已由用户改写**
+> （单次最高分 → 按数字聚合分，并删除早退，`conf_threshold` 0.6 → 0.5）。
+> 对照 demo 时只需对照定位与变体两段，**不要**拿 demo 的选果结果当基准。
 
 ### 6.1 定位圆形 ROI
 
@@ -214,25 +219,36 @@ angle == 0  → 直接用原 ROI，不旋转不缩放
 ### 6.3 识别主循环
 
 ```
-对每个变体（按 |angle| 升序）：
+对每个变体（按 |angle| 升序，**跑完全部角度，不早退**）：
     ① ori.predict([img]) → parse_ori_output
          若返回 1（判定为倒置）→ cv2.rotate(img, ROTATE_180)   ← 先纠正向再识别
     ② rec.predict([fixed]) → parse_rec_output → [(text, score)]
-    ③ 过滤：
-         score < conf_threshold(0.6)              → 丢弃
+    ③ 过滤（**只做准入，不做选择**）：
+         score < conf_threshold(0.5)              → 丢弃
          text 里剔除非数字字符后为空              → 丢弃
          drop_zero 且结果 == "0"                  → 丢弃
     ④ 记入候选 (cleaned, score, angle)
-    ⑤ 早退：仅当 angle == 0
-            且 score >= early_exit_conf(0.98)
-            且数字 ∈ [valid_min, valid_max]      → 立即返回
 
-全部候选按 score 降序排列
-返回第一个数字 ∈ [valid_min, valid_max] 的候选
+全部角度跑完后，按数字分组聚合（_aggregate_by_number）：
+    每个数字 → agg = Σscore、max = 最高单次分、votes = 票数
+    按 (agg, max, votes) 三元组降序排列
+
+取第一个数字 ∈ [valid_min, valid_max] 的；
+返回它在所有票里置信度最高的那一次 → (num, score, angle)
 都不满足 → None
 ```
 
-**注意**：早退条件**绑死了 `angle == 0`**。非 0° 角度即使置信度 0.99 也不会早退 —— 这是刻意的（0° 是正向，可信度最高）。
+**为什么按「聚合分」而不是「单次最高分」**：同一个数字被越多角度认出来，
+越说明它不是某个角度的偶然误读。聚合分把「多角度互相佐证」累加起来 ——
+3 个角度都认出 `12`（各 0.99/0.99/0.996，`agg=2.99`）会赢过某一个角度蒙出的
+`2`（0.995 一张票）。只按最高分取，等于把 4 张票里 3 张的结论丢掉。
+
+**早退已删除**（原设计是 `angle == 0` 且 `score >= 0.98` 就立即返回）：
+聚合分靠各角度的票累加，早退等于主动放弃后面的票，聚合就失去意义。
+代价是每帧都要跑满全部角度 —— 速度已明确不在本项目范围内，接受。
+
+**平局规则**：聚合分相同 → 比最高单次分；再相同 → 比票数。
+`best_angle` 取该数字所有票里置信度最高的那一次（并列时取 `|angle|` 更小的）。
 
 ### 6.4 判定 1/0
 
@@ -283,8 +299,8 @@ Arduino 侧与历史数据格式**不受本次改动影响**。
 |---|---|---|
 | `target.numbers` | `{12,19,20,25,37,41,43}` | 目标集合，命中即 1 |
 | `valid_min` / `valid_max` | 1 / 48 | 有效数字范围 |
-| `conf_threshold` | 0.6 | 置信度下限 |
-| `early_exit_conf` | 0.98 | 0° 早退阈值 |
+| `conf_threshold` | 0.5 | 候选**准入**下限（低于此分不进聚合池）；2026-10-16 由 0.6 下调 |
+| `debug_aggregate` | true | 每帧在控制台打印各数字的 `sum/max/votes`，用于验证阶段观察；稳定后可关 |
 | `roi_size` | 116 | ROI 边长（像素） |
 | `scale` | 1.0 | 旋转时的缩放 |
 | `angles` | `-90,-60,-45,-30,0,30,45,60,90,180` | 10 个角度 |
@@ -304,7 +320,7 @@ Arduino 侧与历史数据格式**不受本次改动影响**。
 app:        log_dir: "./logs"   csv_output: "./logs/results.csv"   save_csv: true
 target:     numbers: [...]      valid_min: 1   valid_max: 48
 models:     rec_options: [...]  ori_options: [...]  default_rec: ...  default_ori: ...
-recognizer: conf_threshold: 0.6   early_exit_conf: 0.98
+recognizer: conf_threshold: 0.5   debug_aggregate: true   drop_zero: true
             angles: [...]   drop_zero: true
 preprocess: roi_size: 116   scale: 1.0   clahe_clip: 2.0   clahe_grid: [8,8]
             min_radius: 20   max_radius: 200
@@ -475,6 +491,8 @@ Controller._on_result:
 | J10 | 「清除历史」时**同时把状态栏统计归零** | 空历史配着"已处理 128"看着像 bug | 串口面板自己的收发计数**不动**（那是设备侧统计，不是本次会话的）|
 | J11 | **识别失败时显示 `?`，而不是按 `0→G` 映射显示成 `G`** | 失败时 `output_value` 也是 `0`（D1），显示成绿色 `G` 等于把「没看清」误报成良品，违反反目标 A2 | 严格说超出了用户原话（用户只给了 0/1 两条映射）。若用户要求「失败也显示 G」，改 `core/models.py` 的 `output_text` 一行即可 —— **但这不建议**，见 §6.4.1 |
 | J12 | `G`/`NG` 的**配色**定为「G 绿 / NG 红 / ? 橙」 | G/NG 是合格判定，制造业 HMI 通行的绿=合格、红=不合格 | 这**推翻了原配色**（原先 `output_value==1` 是绿色）。若用户只想改文字不想动颜色，删掉 `ResultPanel._STYLES` 里的色值即可 |
+| J13 | 删除**早退**（原 `angle == 0` 且 `score ≥ 0.98` 立即返回） | 聚合分靠各角度的票累加，早退等于主动弃票，聚合就失去意义 | **每帧都要跑满全部勾选角度**，比 demo 慢。速度已明确不在本项目范围内，故接受 |
+| J14 | `conf_threshold` 0.6 → **0.5**，且改称「准入阈值」 | 阈值不再决定谁当选（那是聚合分的事），只决定**哪些票能进池**。放宽到 0.5 让弱票也能参与投票 | 进池的噪声票变多；若发现误读增多，先回调这个值 |
 
 
 ---
@@ -561,7 +579,7 @@ AppController.load_models('PP-OCRv6_small_rec', 'PP-LCNet_x1_0_textline_ori')
 仍未真正执行过的（**因为还没灌过一帧真实图像**）：
 
 - `EngineManager` 的缓存是否真的只加载一次
-- `Recognizer.recognize` 的角度循环、方向分类转 180°、早退逻辑
+- `Recognizer.recognize` 的角度循环、方向分类转 180°、**按数字聚合分选结果（无早退）**
 - `DecisionMaker.decide` 的判定
 - `OcrPipeline.run_on_image` 端到端
 - 所有 `infra/` 的串口、图源、CSV 实际读写
@@ -610,9 +628,11 @@ AppController.load_models('PP-OCRv6_small_rec', 'PP-LCNet_x1_0_textline_ori')
 
 【推断，需用户确认】系统算完成，当且仅当：
 
-1. **算法等价**：同一批图，本系统输出的数字/置信度/角度与 `test/test_ocr2.py` **逐条一致**
-   （已知 demo 在 `E:\Python Project\project_0\data\test3` 上跑 11 张的结果是：ok 10 条、no_number 1 条，
-   命中 6 / 未命中 5，其中 6 条是在非 0° 角度上识别成功的，平均耗时 209.6ms）
+1. ~~**算法等价**：与 `test/test_ocr2.py` 逐条一致~~ **【已失效，2026-10-16】**
+   用户在 m01626 改写选果逻辑（按数字聚合分 + 删早退 + 阈值 0.5），两边结果**不再等价**，这是有意为之。
+   本节改为：**同一批图，本系统的数字/角度稳定可复现**；定位圆与变体生成两段仍应与 demo 一致。
+   （demo 在 `E:\Python Project\project_0\data\test3` 上的 11 张：ok 10、no_number 1，命中 6 / 未命中 5，
+   其中 6 条在非 0° 角度成功，平均耗时 209.6ms —— 只作历史参考）
 2. 三种图源都能跑，能正常显示与停止
 3. 模型切换后能加载并生效；角度勾选立即生效
 4. 串口能列端口、开关、发送
@@ -622,6 +642,9 @@ AppController.load_models('PP-OCRv6_small_rec', 'PP-LCNet_x1_0_textline_ori')
 8. **角度面板**：0°/180° 独立、不受「负号」影响；步长下拉框 5/10/15/20/30 能重建网格且保留仍在新网格上的勾选；勾选角度按 §8.1 的规则展开；改勾选立即生效
 9. **历史区**：区域高度可自由拖动（最小 113px），内容超出时出现**竖向**滚动条；
    缩略图恒为 120×120，**不随区域高度变化**
+10. **聚合选果**：同一数字被多角度认出的票数越多越优先（聚合分）；
+    单次 0.99 但只有一票的候选，应输给有两票 0.6 的候选；
+    `best_angle` 取该数字所有票里置信度最高的那次；**不再有早退**（每帧跑满全部勾选角度）
 
 ---
 
@@ -631,7 +654,7 @@ AppController.load_models('PP-OCRv6_small_rec', 'PP-LCNet_x1_0_textline_ori')
 |---|---|
 | 目录骨架（7 目录 / 31 文件） | ✅ 完成 |
 | **环境与依赖** | ✅ 完成（见 §15）—— 模型**实测可加载** |
-| `core/` 七个模块 | ✅ 代码完整；`preprocess.find_roi`/`build_variants` 已用真实样张实测，其余未跑过 |
+| `core/` 七个模块 | ✅ 代码完整；`preprocess.find_roi`/`build_variants` 已用真实样张实测；**`recognizer` 的聚合选果已用真实模型 + 真实样张实测**（见 §6.3）；其余未跑过 |
 | `infra/` 三个模块 | ✅ 代码完整，未跑过 |
 | `app/` 两个模块 | ✅ 代码完整；`EngineLoadWorker` 加载链路**实测通过** |
 | `ui/` 主窗口 + 叠层 + 七个面板 | ✅ 代码完整；加载模型链路实测通过，角度面板 / 历史面板离屏验收通过 |
