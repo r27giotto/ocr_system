@@ -284,7 +284,7 @@ demo 用的样张目录：E:\Python Project\project_0\data\test3   （11 张图�
 
 | 文件 | 行数 | 内容 | 状态 |
 |---|---|---|---|
-| `core/models.py` | 24 | `RecognitionResult` 数据类 | ✅ 完整 |
+| `core/models.py` | 40 | `RecognitionResult` 数据类 + `ok` / **`output_text`（判定显示 G/NG/? 的唯一真源，见 §6.3）** | ✅ 完整 |
 | `core/parsers.py` | 80 | `parse_rec_output` / `parse_ori_output` | ✅ 完整 |
 | `core/preprocess.py` | 83 | `enhance` / `find_roi` / `rotate` / `build_variants` | ✅ 完整，**真实样张 11/11 通过** |
 | `core/engine.py` | 31 | `EngineManager`（按名缓存 + `threading.Lock`） | ⚠️ 未跑过 |
@@ -296,11 +296,12 @@ demo 用的样张目录：E:\Python Project\project_0\data\test3   （11 张图�
 | `infra/csv_logger.py` | 39 | CSV 记录 | ⚠️ **有截断缺陷，见缺陷①** |
 | `app/controller.py` | — | `AppController`（编排层） | ⚠️ 仅构造验证 |
 | `app/workers.py` | — | `EngineLoadWorker` / `InferenceWorker`（QThread） | ⚠️ 仅 import 验证 |
-| `ui/main_window.py` | 181 | 主窗口，组装七个面板；竖直 `QSplitter` 分隔历史区，右列包 `QScrollArea` | ✅ 已实测（见 §6.1） |
-| `ui/overlay.py` | — | 画框 + 结果叠加 | ⚠️ 仅 import 验证 |
-| `ui/widgets/angle_panel.py` | 176 | 固定角度 0°/180° 单独一行（不受负号影响）+ 旋转角度 10°~170° 网格 17 格 +「负号」开关 + 全选/仅 0°/反选/默认 | ✅ 已实测 |
-| `ui/widgets/history_panel.py` | 172 | 历史缩略图，**固定 120×120** + 高度可一直往下拖（最小 113px）+ 横/竖滚轴按需 + 清除按钮 | ✅ 已实测（见 §6.2） |
-| `ui/widgets/*.py`（其余五个） | — | 模型/源/结果/串口/图像面板 | ⚠️ 仅 import 验证 |
+| `ui/main_window.py` | 193 | 主窗口，组装七个面板；竖直 `QSplitter` 分隔历史区，右列包 `QScrollArea`；状态栏显示 `→ G/NG` | ✅ 已实测（见 §6.1 / §6.3） |
+| `ui/overlay.py` | 36 | 画框 + 结果叠加；**大号 `G`/`NG` 按文字宽度右对齐**，配色同 §6.3 | ✅ 已实测（见 §6.3） |
+| `ui/widgets/angle_panel.py` | 186 | 固定角度 0°/180° 单独一行（不受负号影响）+ 旋转角度 10°~170° 网格 17 格 +「负号」开关 + 全选/仅 0°/反选/默认 | ✅ 已实测 |
+| `ui/widgets/history_panel.py` | 187 | 历史缩略图，**固定 120×120** + 高度可一直往下拖（最小 113px）+ 横/竖滚轴按需 + 清除按钮；卡片显示 `数字 → G/NG/?`，边框色同 §6.3 | ✅ 已实测（见 §6.2 / §6.3） |
+| `ui/widgets/result_panel.py` | 65 | 结果显示；**大方框显示 `G`/`NG`/`?`**（底色绿/红/橙），tooltip 给出原始 `output_value` | ✅ 已实测（见 §6.3） |
+| `ui/widgets/*.py`（其余四个） | — | 模型/源/串口/图像面板 | ⚠️ 仅 import 验证 |
 
 `core/models.py` 的 `RecognitionResult` 字段（写代码时对齐这个）：
 ```python
@@ -365,6 +366,29 @@ QVBoxLayout(centralWidget) 实际上已被替换为：
 - **滚轴行为**：竖轴按需（视口 < 169 时出现），横轴按需（内容宽度 > 视口时出现，
   实测面板宽 400 + 8 条记录时 `maximum() = 726`）。
 - 验证脚本 `_verify_hist.py` / `_verify_hist_win.py` / `_verify_scroll.py` 与截图均已删除。
+
+### 6.3 判定显示：`G` / `NG` / `?`（m01391，已实测）
+
+用户原话：「0要对应显示G，1要对应显示NG」。
+
+| 情形 | `output_value` | 界面文字 | 配色 |
+|---|---|---|---|
+| 数字命中目标集合 | `1` | `NG` | 红 `#e74c3c` |
+| 数字不在目标集合 | `0` | `G` | 绿 `#2ecc71` |
+| **识别失败**（`circle_not_found` / `no_number` / `read_failed` / `error`） | `0` | `?` | 橙 `#e67e22` |
+
+- **唯一真源**：`core/models.py` 的 `RecognitionResult.output_text` 只读 property。
+  界面四处都取自它：`ui/widgets/result_panel.py`（大方框）、`ui/widgets/history_panel.py`
+  （`数字 → G/NG` 文字 + 卡片边框色）、`ui/overlay.py`（图像上的大字与 ROI 框色）、
+  `ui/main_window.py`（状态栏）。
+- ★ **识别失败必须单独显示 `?`**：失败时 `output_value` 也是 `0`，照搬映射会显示成绿色的
+  `G`，等于把「没看清」误报成良品（设计文档反目标 A2 / 缺陷 D1）。
+- ⚠️ **只改显示，不改数据**：串口仍发裸 `b'1'`/`b'0'`（`app/controller.py`），
+  CSV 里仍是整数 `1`/`0`（`infra/csv_logger.py`）。Arduino 与历史数据格式不受影响。
+- **【推断】**反推业务语义：`TARGET_NUMBERS` 是**不良品编号**（命中即 NG）。
+  若实际相反，把 `output_text` 里的 `G`/`NG` 两个字符串对调即可。
+- 离屏验收 `_verify_gn.py`（已删）26 项全过：三态文字、三态底色、G/NG 边框不同色、
+  叠层绿色像素 G 图 5430 > NG 图 0。
 
 ---
 
@@ -606,3 +630,5 @@ $env:PADDLE_PDX_DISABLE_MODEL_SOURCE_CHECK = 'True'
 | — | 【已实测】`_verify_scroll.py`：面板 100/140px → 竖向滚轴有、230/400px → 无；面板宽 400 + 8 条记录 → 横向滚轴有（`maximum()=726`）、宽 1200 → 无；96/120/200/300/500/800 六种高度下图片框恒 120×120、卡片恒 132×161；真实 `MainWindow` 里能拖到 113px（原 221px）；`compileall` 退出码 0。提交 **`b960dc0`** |
 | m01277 | 用户：「更新到本地git」→ 提交 `config.yaml`（用户自己改的两处：`recognizer.early_exit_conf` 0.98→0.99、`source.loop` true→false）为 **`3ef586b`**。仓库无远程，分支 `main` |
 | m01286 | 用户：「更新记忆和技术文档」→ 设计文档 `docs/superpowers/specs/2026-10-15-ocr-system-design.md` 升到 **v1.2**：§11 两个「阻塞项」改写为 ✅ 已解决（阻塞项 1 推翻为 DSH 沙箱问题、附可复用判据；阻塞项 2 记为三个真实根因表 + §11.3 诊断障碍 + §11.4 验证状态）；新增 §8.1 角度面板规则 / §8.2 历史区与缩略图规则；§10 补 J7–J10；§12 的 Q4 从「环境权限」改写为「离线是否硬约束」；§13 增设第 8/9 条验收；§14 实现状态表重写；**新增 §15 环境与依赖（已实测）**。本文件 §12 时间线补齐 m01143–m01286 |
+| m01391 | 用户（配「检测结果」面板截图）：「这里修改一下，0要对应显示G，1要对应显示NG」→ 新增 `core/models.py` 的 `RecognitionResult.output_text` 只读 property 作为**唯一真源**（0→`G`、1→`NG`、识别失败→`?`），界面四处统一取自它：`result_panel`（大方框）、`history_panel`（文字 + 边框）、`overlay`（图像上的大字与框色）、`main_window`（状态栏）。配色改为 **G 绿 / NG 红 / ? 橙**（原先 `output_value==1` 是绿色，本次**推翻**）。**串口与 CSV 不动**，仍是原始整数 `1`/`0` |
+| — | 【已实测】`_verify_gn.py` 离屏验收 26 项全过：四类样本（良品 / 不良 / 没找到圆 / 没识别出数字）的 `output_text`、面板文字、面板底色、历史卡片文字与边框色；`output_value` 仍是 0/1 且 `output_text` 无 setter；叠层绿色像素 G 图 5430 > NG 图 0；`compileall` 退出码 0。截图确认 `NG` 在 80×80 方框内不被挤（两字降到 38px） |

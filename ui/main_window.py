@@ -184,7 +184,8 @@ class MainWindow(QMainWindow):
             f"平均 {avg:.1f}ms",
         ]
         if res is not None:
-            parts.append(f"当前 {res.filename or '-'} → {res.output_value}")
+            # 显示 G / NG（与 ResultPanel、历史面板、图像叠层一致）
+            parts.append(f"当前 {res.filename or '-'} → {res.output_text}")
         self.status_bar.showMessage("  |  ".join(parts))
 
     def closeEvent(self, e):

@@ -42,19 +42,20 @@ class HistoryItem(QWidget):
 
         # 2) 文字信息
         num_text = res.number or "--"
-        self.info_label = QLabel(f"{res.filename[:14]}\n{num_text} → {res.output_value}")
+        self.info_label = QLabel(f"{res.filename[:14]}\n{num_text} → {res.output_text}")
         self.info_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.info_label.setWordWrap(True)
 
-        # 3) 边框颜色标识决策结果（用 objectName 把选择器限制在本控件上，
+        # 3) 边框颜色标识判定（用 objectName 把选择器限制在本控件上，
         #    否则 QWidget 选择器会连子控件一起画边框）
+        #    配色跟 ResultPanel 一致：G=绿 / NG=红 / ?=橙
         self.setObjectName("historyItem")
         if res.status != "ok":
-            border = "#e74c3c"    # 红：异常
+            border = "#e67e22"    # 橙：无法判定（没找到圆 / 没识别出数字）
         elif res.output_value == 1:
-            border = "#2ecc71"    # 绿：命中
+            border = "#e74c3c"    # 红：NG（不良）
         else:
-            border = "#bdc3c7"    # 灰：未命中
+            border = "#2ecc71"    # 绿：G（良品）
         self.setStyleSheet(
             f"#historyItem {{ border: 2px solid {border}; border-radius: 4px; }}"
         )
