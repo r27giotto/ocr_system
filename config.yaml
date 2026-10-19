@@ -41,12 +41,16 @@ preprocess:
   min_radius: 20
   max_radius: 200
 
+# 输入源：这一段是「输入源面板」打开时各控件的**初始值**。
+# 注意：界面上改了不会写回这个文件，它只决定启动时的默认状态。
 source:
-  type: "folder"
+  type: "folder"          # folder / single / camera
   folder_path: ""
   camera_index: 0
   fps: 15
   poll_interval_ms: 300
+  # 循环播放：默认 **false（不勾选）**。勾上才会放完一遍再从第一张开始，
+  # 否则跑完一遍就停。
   loop: false
 
 serial:

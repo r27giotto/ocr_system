@@ -180,11 +180,18 @@ recognizer: conf_threshold: 0.5   debug_aggregate: true
 preprocess: roi_size: 116   scale: 1.0   clahe_clip: 2.0   clahe_grid: [8,8]
             min_radius: 20   max_radius: 200
 source:     type: "folder"   folder_path: ""   camera_index: 0   fps: 15
-            poll_interval_ms: 300   loop: true
+            poll_interval_ms: 300   loop: false
 serial:     baudrate: 115200   last_port: "COM3"   send_on_change_only: false
 ```
 
 这些数值全部来自 `test/test_ocr2.py` 的常量，**是调优过的，不要随手改**。
+
+> **`source:` 段是例外**：它不来自 test_ocr2.py，而是**输入源面板的初始值**。
+> `MainWindow` 把 `config["source"]` 传给 `SourcePanel(config)`，面板据此决定
+> 打开界面时选哪个 radio、路径框内容、`fps` / `interval_ms` / `loop` 的初值
+> （缺键时兜底 `folder` / 15 / 300 / **false**）。界面上改了**不会写回**
+> `config.yaml`。`loop` 默认 **false（不勾选）**——`FolderSource` 放完一遍就
+> `finished`；勾上才从头再来。
 
 > 角度面板分**两组**（`ui/widgets/angle_panel.py`）：
 >
@@ -491,11 +498,36 @@ AppController + MainWindow(真配置)        构造成功，标题 "OCR 识别�
 | ① | `infra/csv_logger.py:16` | `open(self.path, "w", ...)` —— **每次启动清空 `logs/results.csv`** | 改 `"a"`，或按 `app.save_csv` 决定 |
 | ② | `main.py:32` + `ui/main_window.py:150` | 两边都连/调 `controller.shutdown()` → **关闭时执行两次** | 只保留一处 |
 | ③ | `config.yaml:8-9` 与 `:22-25` | `valid_min`/`valid_max` 在 `target:` 和 `recognizer:` **重复定义**，会漂移 | 收敛到一处 |
-| ④ | `config.yaml:35-41` | `source:` 段**根本没被读取**；`SourcePanel` 里硬编码 15fps / 300ms / loop | 接线到 config |
+| ④ | ~~`config.yaml:44-50`~~ | ~~`source:` 段**根本没被读取**；`SourcePanel` 里硬编码 15fps / 300ms / loop~~ | ✅ **已修**（见 §7.1） |
 | ⑤ | `config.yaml:44-45` | `serial.last_port` / `baudrate` 未被使用 | 接线到 `SerialPanel` |
 | ⑥ | `infra/image_source.py:3` | `from PyQt6.QtCore import QObject, QTimer, QThread, pyqtSignal` → **`infra/` 不是纯 Python 层**。`core/` 是干净的 | 至少知情；要么下沉到 app/ui，要么接受 |
 | ⑦ | `core/models.py:19` + `ui/widgets/history_panel.py:66` | `frame` 存**整帧**，`MAX_ITEMS = 200` → 最多 **200 张整帧常驻内存** | 存缩略图 |
 | ⑧ | `core/pipeline.py:45` | 调 `decider.decide(num)` 没传 `status`，而 `decision.py:23` 有这个参数（默认 `"ok"`）→ 参数形同虚设 | 传 `res.status` |
+
+### 7.1 ✅ 已修：输入源面板不再硬编码，循环默认不勾选（m01887）
+
+**用户要求**：「修改前端界面的默认配置，默认不勾选循环」。
+
+- `E:\Python Project\ocr_system\ui\widgets\source_panel.py`：`SourcePanel.__init__(self, config: dict = None)`，
+  从 `config["source"]` 读初值 —— `type`（选 radio）/ `folder_path`（填路径框）/
+  `camera_index` / `fps` / `poll_interval_ms` / `loop`；**缺键时兜底 `folder` / "" / 0 / 15 / 300 / false**。
+  `self.loop_check.setChecked(bool(cfg.get("loop", False)))` —— 原来是硬编码
+  `setChecked(True)`。界面上改动**不写回** config.yaml。
+- `E:\Python Project\ocr_system\ui\main_window.py:38`：`SourcePanel()` → `SourcePanel(config.get("source", {}))`。
+- `E:\Python Project\ocr_system\infra\image_source.py:23`：`FolderSource.__init__` 的
+  `loop` 默认值 `True` → **`False`**（控制器一直显式传参，改默认值只为消除隐患）。
+- `E:\Python Project\ocr_system\config.yaml`：`source:` 段加注释说明它是面板初值、`loop` 默认 false。
+  值仍是 `type: folder` / `fps: 15` / `poll_interval_ms: 300` / `loop: false`。
+
+**数据链路（已实测）**：`loop_check.isChecked()` → `SourcePanel._start()` 的
+`cfg["loop"]` → `app/controller.py:86` `loop = cfg["loop"] and t == "folder"` →
+`FolderSource(path, interval_ms, loop)`。不勾选时 `FolderSource` 放完一遍就
+`finished`，勾上才 `self._idx` 归零从头再来。
+
+**验收**（`_verify_loop.py`，临时，已删，EXIT=0，18 项全过）：默认不勾选；
+`config` 里 `loop: true` 时勾上；`type: camera` / `camera_index: 2` / `fps: 30`
+都生效；`_start()` 发出的 `cfg["loop"]` 与勾选一致；真实 `MainWindow` 里未勾选；
+控制器把 `False`/`True` 原样透传给 `FolderSource`；`FolderSource` 默认值为 `False`；不传 `config` 时向后兼容。
 
 ---
 
@@ -714,3 +746,4 @@ $env:PADDLE_PDX_DISABLE_MODEL_SOURCE_CHECK = 'True'
 | — | 【已实测】★ **单帧端到端首次跑通**（`_e2e.py`，真实模型走 `EngineManager → Preprocessor → Recognizer → DecisionMaker → OcrPipeline`，`project_0\data\test3` 12 张样张，默认 8 个角度）：**11/12 ok**、1 张 `no_number`（`4.png`）；命中 6 张（12/19/25/37/41/43）；成功耗时 224–239ms（首张 1925ms 含模型加载）；`hit` 与 `output_value` 完全对应（命中 → `1` → `NG`，未命中 → `0` → `G`，失败 → `?`）。**但 `20.png` 被判成 `2`（demo 读作 `20`）→ 见 §5.3.1**。提交 **`baca498`** |
 | m01818 | 用户：「按照修法1修改」→ 聚合分由 `Σscore` 改为 **`Σ(score - conf_threshold)`**（边际分），并**四舍五入 6 位**去掉浮点尾差（否则「边际相同→比票数」这一级会被 `0.9+0.9-1.0` 与 `0.9+0.7+0.7-1.5` 的 1e-16 误差架空）；`debug_aggregate` 的打印前缀 `sum=` 改成 `margin=`；`_aggregate_by_number` 增加 `threshold` 参数 |
 | — | 【已实测】`_verify_margin.py` 全过（T1–T13）：T1 边际聚合分 `[0.7, 0.55, 0.49]`；T2 **两张 0.8 的票胜一张 0.99**（0.6 > 0.49，多角度互证的性质保住了）；T3 三角度全跑（无早退）；T4 0.499 拒 / 0.5 收；T5 超范围跳过；**T5b 用 `20.png` 的真实票复现：旧规则选 `2`（留证）、新规则 `20` 边际 0.9990 > `2` 的 0.5871**；T6–T11 丢 0 / 清洗非数字 / 转 180° / 平局三档 / `best_angle` / 空候选；T12 真实模型 `20.png → 20`、`12.png → 12`、`37.png → 37`；**T13 完整 `OcrPipeline` 跑 12 张 → 11/12 ok，命中 7 张（比修前多出 `20.png`）**，`20.png` 现在是 `conf=0.9997 angle=-90°` |
+| m01887 | 用户：「修改前端界面的默认配置，默认不勾选循环」→ `SourcePanel.__init__(self, config: dict = None)` 从 `config["source"]` 读初值（`type`/`folder_path`/`camera_index`/`fps`/`poll_interval_ms`/`loop`，缺键兜底 `folder`/""/0/15/300/**false**），**循环默认不勾选**（原为硬编码 `setChecked(True)`）；`ui/main_window.py:38` 改为 `SourcePanel(config.get("source", {}))`；`FolderSource.__init__` 的 `loop` 默认 `True`→`False`；`config.yaml` 的 `source:` 段加注释说明它是面板初值。**缺陷清单 ④ 就此关闭**（`source:` 段以前根本没人读）|

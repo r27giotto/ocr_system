@@ -35,7 +35,7 @@ class MainWindow(QMainWindow):
             default_rec=config["models"]["default_rec"],
             default_ori=config["models"]["default_ori"],
         )
-        self.source_panel = SourcePanel()
+        self.source_panel = SourcePanel(config.get("source", {}))
         self.angle_panel = AnglePanel(config["recognizer"]["angles"])
         self.result_panel = ResultPanel()
         self.serial_panel = SerialPanel()

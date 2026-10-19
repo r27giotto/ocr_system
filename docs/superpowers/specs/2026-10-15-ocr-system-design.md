@@ -345,7 +345,11 @@ serial:     baudrate: 115200   last_port: "COM3"   send_on_change_only: false
 
 **【我的判断】两个配置区的定位**：
 - `models.rec_options` / `ori_options` 是**候选清单**（给下拉框用），`default_rec` / `default_ori` 是**初始选中项**
-- `source:` 段**意图上**应作为界面初值，但当前实现里界面硬编码了 15fps / 300ms / 循环开 —— 见 §11 D3
+- `source:` 段是**输入源面板的初值**（m01887 起已接线）：`MainWindow` 把 `config["source"]` 传给
+  `SourcePanel(config)`，面板据此决定 `type`（选哪个 radio）/ `folder_path`（路径框内容）/
+  `camera_index` / `fps` / `poll_interval_ms` / `loop`，缺键兜底 `folder` / `""` / `0` / `15` / `300` / **`false`**。
+  **界面上改了不写回** `config.yaml`。`loop` 默认 **false（不勾选）**：`FolderSource` 放完一遍就
+  `finished`，勾上才从头再来。
 - `serial.last_port` / `baudrate` 意图上应作为串口面板初值，当前未接线 —— 见 §11 D3
 
 **⚠️ 已知冗余**：`valid_min`/`valid_max` 同时出现在 `target:` 段和 `recognizer.py` 的默认值里，两处会漂移。见 §11 D4。
@@ -521,7 +525,7 @@ Controller._on_result:
 |---|---|---|---|
 | **D1** | `app/controller.py:114-120` + `core/decision.py:24` | **识别失败也发 0**。`circle_not_found` / `no_number` 时 `output_value = 0`，串口照样发 `'0'`。等于把"没看清"和"看清了但不是目标"混为一谈。 | **高** —— 见反目标 A2，需用户裁决 |
 | ~~D2~~ | `infra/image_source.py:3` | 引入了 `QTimer`/`QThread` → `infra/` 不是纯 Python 层。 | ✅ **已裁定：接受**。用户的「零 Qt 依赖」原话只标注在 `core/` 上（「core/ ★ 纯 Python，无 Qt 依赖」），`infra/` 从未被要求纯 Python，且 `core/` 确实干净。仅记录在案，**不重构**。 |
-| **D3** | `config.yaml:35-45` | `source:` 段和 `serial.last_port`/`baudrate` **根本没被读取**；界面里硬编码了 15fps / 300ms / 循环开。 | 中 |
+| ~~D3~~ | `config.yaml:44-50` | ~~`source:` 段和 `serial.last_port`/`baudrate` **根本没被读取**；界面里硬编码了 15fps / 300ms / 循环开。~~ | ✅ **`source:` 部分已修（m01887）**：`SourcePanel(config)` 从 `config["source"]` 读初值，**循环默认不勾选**（`loop: false`）。理由见 §7。`serial.last_port`/`baudrate` **仍未接线**，这一半仍开着。 |
 | **D4** | `config.yaml:8-9` 与 `core/recognizer.py:16-17` | `valid_min`/`valid_max` **两处重复定义**，会漂移。 | 中 |
 | **D5** | `ui/widgets/source_panel.py:94` + `app/controller.py:80-85` | 界面有"单图"选项，但 controller 只认 `camera` 和 `else`（都走文件夹）。选单图会拿到文件路径当作文件夹。 | 中 —— **【我的判断】应把「单图」实现为真实的第三种模式**（载入单张图 → 处理一次 → 停止；结果照常进 CSV/历史）。理由：界面已提供该选项，删掉它是破坏功能，实现它是安全默认。 |
 | **D6** | `core/models.py:19` + `ui/widgets/history_panel.py:66` | `frame` 存**整帧** + `MAX_ITEMS = 200` → 最多 200 张整帧常驻内存。 | 中 |

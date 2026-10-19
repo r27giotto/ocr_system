@@ -9,35 +9,52 @@ class SourcePanel(QGroupBox):
     start_requested = pyqtSignal(dict)
     stop_requested = pyqtSignal()
 
-    def __init__(self):
+    def __init__(self, config: dict = None):
+        """config 传 `config.yaml` 的 `source:` 段，作为各控件的**初始值**。
+
+        界面上的改动不会写回 config.yaml —— 它只决定「打开界面时是什么状态」。
+        """
         super().__init__("输入源")
+        cfg = dict(config or {})
 
         # 类型
         self.rb_folder = QRadioButton("文件夹")
         self.rb_single = QRadioButton("单图")
         self.rb_camera = QRadioButton("摄像头")
-        self.rb_folder.setChecked(True)
+        stype = str(cfg.get("type", "folder") or "folder").lower()
+        if stype == "camera":
+            self.rb_camera.setChecked(True)
+        elif stype == "single":
+            self.rb_single.setChecked(True)
+        else:
+            self.rb_folder.setChecked(True)
 
         # 路径
         self.path_edit = QLineEdit()
         self.path_edit.setPlaceholderText("选择文件夹或图片…")
+        self.path_edit.setText(str(cfg.get("folder_path", "") or ""))
         self.btn_browse = QPushButton("浏览…")
         self.btn_browse.clicked.connect(self._browse)
 
         # 摄像头参数
         self.cam_combo = QComboBox()
         self.cam_combo.addItems(["0", "1", "2", "3"])
+        cam_index = str(cfg.get("camera_index", 0))
+        if self.cam_combo.findText(cam_index) >= 0:
+            self.cam_combo.setCurrentText(cam_index)
         self.fps_spin = QSpinBox()
         self.fps_spin.setRange(1, 60)
-        self.fps_spin.setValue(15)
+        self.fps_spin.setValue(int(cfg.get("fps", 15) or 15))
 
         # 文件夹参数
         self.interval_spin = QSpinBox()
         self.interval_spin.setRange(50, 5000)
-        self.interval_spin.setValue(300)
+        self.interval_spin.setValue(int(cfg.get("poll_interval_ms", 300) or 300))
         self.interval_spin.setSuffix(" ms")
+        # 循环播放：默认**不勾选**（`source.loop` 默认 false）。
+        # 勾上才有「放完一遍再从第一张开始」的行为，否则跑完一遍就停。
         self.loop_check = QCheckBox("循环播放")
-        self.loop_check.setChecked(True)
+        self.loop_check.setChecked(bool(cfg.get("loop", False)))
 
         # 按钮
         self.btn_start = QPushButton("▶ 开始")

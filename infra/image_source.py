@@ -18,9 +18,9 @@ class FolderSource(BaseSource):
     """
     轮询文件夹，按文件名排序逐张产出。
     - 单图模式：传入单文件路径，只产出一帧后 finished。
-    - 文件夹模式：循环产出，可设 loop。
+    - 文件夹模式：默认**不循环**，放完一遍就 finished；loop=True 才从头再来。
     """
-    def __init__(self, path: str, interval_ms: int = 300, loop: bool = True):
+    def __init__(self, path: str, interval_ms: int = 300, loop: bool = False):
         super().__init__()
         self.path = path
         self.interval_ms = interval_ms
