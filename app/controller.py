@@ -1,6 +1,7 @@
 from PyQt6.QtCore import QObject, pyqtSignal
 
 from core.engine import EngineManager
+from core.models import RecognitionResult
 from core.preprocess import Preprocessor, PreprocessConfig
 from core.recognizer import Recognizer, RecognizerConfig
 from core.decision import DecisionMaker
@@ -51,12 +52,16 @@ class AppController(QObject):
         # ---- 推理线程 ----
         self.infer_worker = InferenceWorker(self.pipeline)
         self.infer_worker.result_ready.connect(self._on_result)
+        # 每处理完一帧就放行输入源，去取下一帧（见 InferenceWorker 的说明）
+        self.infer_worker.frame_processed.connect(self._on_frame_processed)
         self.infer_worker.start()
 
         # ---- 状态 ----
         self.current_source = None
-        self._last_sent_value = None
-        self._send_on_change_only = False
+        # ★ 对账计数器：进来的帧数 vs 出去的结果数。
+        #   两者相等 = 每张图都处理到了；不等就说明有帧卡在队列里。
+        self.frames_in = 0
+        self.results_out = 0
 
     # ---------- 模型 ----------
     def load_models(self, rec_name: str, ori_name: str):
@@ -86,6 +91,7 @@ class AppController(QObject):
             loop = cfg["loop"] and t == "folder"
             src = FolderSource(path, cfg["interval_ms"], loop)
         src.frame_ready.connect(self._on_frame)
+        src.read_failed.connect(self._on_read_failed)
         src.finished.connect(self.source_finished.emit)
         self.current_source = src
         src.start()
@@ -97,11 +103,36 @@ class AppController(QObject):
 
     # ---------- 帧 → 推理 ----------
     def _on_frame(self, frame, name):
+        self.frames_in += 1
         self.frame_ready.emit(frame, name)
         self.infer_worker.submit(frame, name)
 
+    def _on_read_failed(self, name):
+        """图片打不开 —— 它仍然是一张图，必须走完整条分发链。
+
+        以前这里是 `if img is not None` 直接跳过：坏文件会静默消失，
+        既不进历史、也不进 CSV、更不会给 Arduino 发信号。
+        """
+        self.frames_in += 1
+        res = RecognitionResult(
+            filename=name, status="read_failed",
+            error_msg="图片无法读取（文件损坏或格式不支持）")
+        self._on_result(res)
+        self._ack_source()
+
+    def _on_frame_processed(self, name: str = ""):
+        self._ack_source()
+
+    def _ack_source(self):
+        """告诉输入源：这一帧处理完了，可以取下一帧。"""
+        if self.current_source:
+            self.current_source.frame_done()
+
     # ---------- 结果 → 决策 → 串口 → UI ----------
     def _on_result(self, res):
+        # ★ 每张图都必须留下一条记录 + 一个串口字节
+        self.results_out += 1
+
         # 1) UI 更新
         self.result_ready.emit(res)
 
@@ -112,19 +143,12 @@ class AppController(QObject):
             except Exception as e:
                 print("csv write error:", e)
 
-        # 3) 串口
+        # 3) 串口：**不做「仅变化时发送」**
+        #    固件是「收到一个 '1' 吹一次、收到 '0' 立刻关」，按帧发才能逐颗动作；
+        #    若只在变化时发，连续两颗 NG 的第二颗就不会吹。
         if self.serial.is_open:
-            if (not self._send_on_change_only
-                    or res.output_value != self._last_sent_value):
-                ok, msg = self.serial.send_value(res.output_value)
-                if ok:
-                    self._last_sent_value = res.output_value
-                self.serial_sent.emit(res.output_value, ok, msg)
-
-    def set_send_on_change_only(self, v: bool):
-        self._send_on_change_only = bool(v)
-        if not v:
-            self._last_sent_value = None
+            ok, msg = self.serial.send_value(res.output_value)
+            self.serial_sent.emit(res.output_value, ok, msg)
 
     # ---------- 串口 ----------
     def refresh_ports(self):
@@ -135,6 +159,12 @@ class AppController(QObject):
 
     def close_serial(self):
         self.serial.close()
+
+    # ---------- 对账 ----------
+    @property
+    def pending(self) -> int:
+        """已收帧但还没出结果的帧数（正常应为 0 或 1）。"""
+        return max(0, self.frames_in - self.results_out)
 
     # ---------- 退出 ----------
     def shutdown(self):

@@ -419,13 +419,13 @@ demo 用的样张目录：E:\Python Project\project_0\data\test3   （11 张图�
 | `core/decision.py` | 35 | `DecisionMaker.decide` → 1/0 | ⚠️ 未跑过 |
 | `core/recognizer.py` | 145 | `Recognizer.recognize` 多角度循环 + **`_aggregate_by_number` 按数字聚合分选结果**（无早退） | ✅ 已实测（真实样张，见 §5.3） |
 | `core/pipeline.py` | 57 | `OcrPipeline.run_on_image` 单帧端到端 | ✅ 已实测（真实模型 + 12 张真实样张，11/12 ok） |
-| `infra/image_source.py` | — | `FolderSource` / `CameraSource` | ⚠️ **依赖 Qt，见缺陷⑥** |
-| `infra/serial_service.py` | — | 简化版串口；发裸 `b'1'`/`b'0'`（协议已由固件定案，见 §5.4.1） | ⚠️ 未接过真设备 |
+| `infra/image_source.py` | 146 | `FolderSource`（single-shot 定时器，一帧在飞）/ `CameraSource`（`threading.Event` 等 ack）；`read_failed` 上报坏图 | ✅ 已实测（见 §6.4） |
+| `infra/serial_service.py` | 67 | 简化版串口；发裸 `b'1'`/`b'0'`（协议已由固件定案，见 §5.4.1） | ⚠️ 未接过真设备 |
 | `arduino/sketch_oct19a/sketch_oct19a.ino` | 43 | **用户写的**接收端固件：`'1'`→开阀 100ms→自动关，`'0'`→立即关 | ⚠️ 未烧录实测 |
 | `infra/csv_logger.py` | 39 | CSV 记录 | ⚠️ **有截断缺陷，见缺陷①** |
-| `app/controller.py` | — | `AppController`（编排层） | ⚠️ 仅构造验证 |
-| `app/workers.py` | — | `EngineLoadWorker` / `InferenceWorker`（QThread） | ⚠️ 仅 import 验证 |
-| `ui/main_window.py` | 193 | 主窗口，组装七个面板；竖直 `QSplitter` 分隔历史区，右列包 `QScrollArea`；状态栏显示 `→ G/NG` | ✅ 已实测（见 §6.1 / §6.3） |
+| `app/controller.py` | 163 | `AppController`（编排层）；**每帧必发一个串口字节**，`frames_in`/`results_out` 对账 | ✅ 已实测（见 §6.4） |
+| `app/workers.py` | 79 | `EngineLoadWorker` / `InferenceWorker`；**队列不丢帧**，`frame_processed` 做背压 | ✅ 已实测（见 §6.4） |
+| `ui/main_window.py` | 181 | 主窗口，组装七个面板；竖直 `QSplitter` 分隔历史区，右列包 `QScrollArea`；状态栏显示 `→ G/NG` 与 `待处理 N` | ✅ 已实测（见 §6.1 / §6.3 / §6.4） |
 | `ui/overlay.py` | 36 | 画框 + 结果叠加；**大号 `G`/`NG` 按文字宽度右对齐**，配色同 §6.3 | ✅ 已实测（见 §6.3） |
 | `ui/widgets/angle_panel.py` | 263 | 固定角度 0°/180° 单独一行（不受负号影响）+ 旋转角度网格（**步长下拉框 5/10/15/20/30**，默认 5° 共 35 格）+「负号」开关 + 全选/仅 0°/反选/默认 | ✅ 已实测 |
 | `ui/widgets/history_panel.py` | 187 | 历史缩略图，**固定 120×120** + 高度可一直往下拖（最小 113px）+ 横/竖滚轴按需 + 清除按钮；卡片显示 `数字 → G/NG/?`，边框色同 §6.3 | ✅ 已实测（见 §6.2 / §6.3） |
@@ -519,6 +519,67 @@ QVBoxLayout(centralWidget) 实际上已被替换为：
 - 离屏验收 `_verify_gn.py`（已删）26 项全过：三态文字、三态底色、G/NG 边框不同色、
   叠层绿色像素 G 图 5430 > NG 图 0。
 
+### 6.4 ★ 每张图必处理、必发一个串口字节（m03412，已实测）
+
+用户原话：「我需要确保每一张图片都要识别到，对于每一张图片都需要发出对应的处理信号」。
+
+**修复前有两条路会「静默吞掉」一张图**：
+
+| 吞掉的地方 | 原来怎么吞的 | 后果 |
+|---|---|---|
+| `app/workers.py` 的推理队列 | `queue.Queue(maxsize=1)`，满了就 `get_nowait()` 丢**最旧**帧 | 界面闪过、但没识别、没进 CSV、没发串口 |
+| `infra/image_source.py:_tick` | `if img is not None:` 才发帧，`cv2.imread` 失败直接跳过 | 坏文件凭空消失，一张图对应零条记录 |
+
+**现在的机制（三条一起才成立）**：
+
+1. **推理队列不设上限**（`queue.Queue()`，`submit()` 直接 `put`，永不丢）。
+2. **一帧在飞**：`InferenceWorker.frame_processed` 每帧发一次（成功/失败都发，
+   放在 `finally` 里，UI 槽抛异常也放行）→ `AppController._ack_source()` →
+   `current_source.frame_done()` → 输入源才去取下一帧。
+   - `FolderSource` 的定时器改成 **single-shot**：发一帧就停表，收到 `frame_done` 再上弦。
+     所以 `poll_interval_ms` 的语义变成了「**上一帧处理完后再等多久**」，不是固定帧率。
+   - `CameraSource` 用 `threading.Event`：读完一帧 → 发出去 → `self._ack.wait()` →
+     收到 `frame_done` 才读下一帧。**不再按 fps 闷头读**（那样缓冲区里的帧会被顶掉）。
+3. **打不开的图也上报**：`BaseSource.read_failed(name)` → `AppController._on_read_failed`
+   造一条 `status="read_failed"` 的 `RecognitionResult`，走**同一条**分发链
+   （界面 `?` + `history_panel` 的「无图」占位 + CSV 一行 + 串口一个 `'0'`）。
+
+**每帧必发串口**：`AppController._on_result` 里删掉了 `send_on_change_only` 分支，
+只要串口是开的，每个结果都发一个字节。理由：固件是「收到 `'1'` 吹一次、收到 `'0'` 立刻关」，
+若只在变化时发，**连续两颗 NG 的第二颗就不会吹**。`SerialPanel` 的「仅变化时发送」
+勾选框已删除，换成一行说明「每张图发 1 字节：`'1'`=NG 吹阀 / `'0'`=G 放行」；
+`config.yaml` 的 `serial.send_on_change_only` 键也删了。
+
+**对账口径**（`AppController`）：
+
+```
+frames_in   进来几张       （_on_frame / _on_read_failed 各 +1）
+results_out 出去几个结果   （_on_result 每次 +1）
+pending     = frames_in - results_out   ← 正常恒为 0；界面状态栏显示「待处理 N」
+```
+
+**验收【已实测】**（`_verify_every_frame.py`，临时，已删，25 项全过）：
+
+| 用例 | 文件数 | frames_in | results_out | 串口字节 | CSV 行 | 队列残留 | 最大积压 |
+|---|---|---|---|---|---|---|---|
+| A `project_0\data\test3`，`interval_ms=0`（最快，最容易触发丢帧） | 12 | 12 | 12 | 12 | 12 | 0 | 0 |
+| B 1 张好图 + 1 张坏图 | 2 | 2 | 2 | 2 | 2 | 0 | 0 |
+
+- A 还逐条比对了「串口字节序列」与「CSV 的 `output_value` 序列」，完全一致：
+  `[1,1,1,1,1,0,1,0,1,0,1,0]`
+- A 的逐张结果（与 §5.3 的旧记录一致）：`12/19/20/25/37/41/43` → NG，
+  `4.png` = `no_number`，`42/7/T2..-5` → G
+- B 的坏图：`status=read_failed`、进了 CSV、也发了 `'0'`
+- UI 冒烟 `_verify_ui_smoke.py`（已删，12 项全过）：状态栏 `待处理 0` 正常；
+  喂一条结果后变 `已处理 1 / 命中 1 / 待处理 0`；坏图 `frame=None` 也能进历史（「无图」占位）
+
+**⚠️ 未实测的部分**：`CameraSource` 的新等待逻辑没有硬件，只做过代码审读 ——
+真机联调时先确认「按 fps 设置不再丢帧」。另外串口**没打开**时不会发字节（这是硬件状态，
+不是丢帧），界面状态栏会显示「未连接」。
+
+> 语义变化提醒：`poll_interval_ms` 以前是固定节拍，现在是「处理完再等这么久」。
+> 想尽快跑完就把间隔设小（界面下限 50 ms）；想慢慢看就设大。
+
 ---
 
 ## 7. 缺陷清单
@@ -557,6 +618,19 @@ AppController + MainWindow(真配置)        构造成功，标题 "OCR 识别�
 | ⑥ | `infra/image_source.py:3` | `from PyQt6.QtCore import QObject, QTimer, QThread, pyqtSignal` → **`infra/` 不是纯 Python 层**。`core/` 是干净的 | 至少知情；要么下沉到 app/ui，要么接受 |
 | ⑦ | `core/models.py:19` + `ui/widgets/history_panel.py:66` | `frame` 存**整帧**，`MAX_ITEMS = 200` → 最多 **200 张整帧常驻内存** | 存缩略图 |
 | ⑧ | `core/pipeline.py:45` | 调 `decider.decide(num)` 没传 `status`，而 `decision.py:23` 有这个参数（默认 `"ok"`）→ 参数形同虚设 | 传 `res.status` |
+
+> ✅ **已从「待修」里划掉两条**（m03412）：推理队列丢帧、坏图被 `if img is not None` 跳过 ——
+> 两条都会「静默吞掉一张图」，现已修，机制与实测见 **§6.4**。
+
+### 7.2 ✅ 已修：丢帧 + 坏图被跳过（m03412）
+
+| 原来 | 现在 |
+|---|---|
+| `InferenceWorker` 的 `queue.Queue(maxsize=1)`，满了丢最旧帧 | 队列不设上限 + 一帧在飞（`frame_processed` → `frame_done()` 背压） |
+| `FolderSource._tick` 的 `if img is not None:` 让坏文件静默消失 | `read_failed(name)` 上报 → 造一条 `status="read_failed"` 结果，照常进界面/CSV/串口 |
+| `send_on_change_only` 可以勾上，连续两颗 NG 的第二颗不吹 | 该选项已删除，**每帧必发一个字节** |
+
+细节与 25 项验收数字见 **§6.4**。
 
 ### 7.1 ✅ 已修：输入源面板不再硬编码，循环默认不勾选（m01887）
 
@@ -806,3 +880,5 @@ $env:PADDLE_PDX_DISABLE_MODEL_SOURCE_CHECK = 'True'
 | m01887 | 用户：「修改前端界面的默认配置，默认不勾选循环」→ `SourcePanel.__init__(self, config: dict = None)` 从 `config["source"]` 读初值（`type`/`folder_path`/`camera_index`/`fps`/`poll_interval_ms`/`loop`，缺键兜底 `folder`/""/0/15/300/**false**），**循环默认不勾选**（原为硬编码 `setChecked(True)`）；`ui/main_window.py:38` 改为 `SourcePanel(config.get("source", {}))`；`FolderSource.__init__` 的 `loop` 默认 `True`→`False`；`config.yaml` 的 `source:` 段加注释说明它是面板初值。**缺陷清单 ④ 就此关闭**（`source:` 段以前根本没人读）|
 | — | 【已实测】`_verify_loop.py` 18 项全过：默认不勾选；`config` 里 `loop: true` 时勾上；`type: camera` / `camera_index: 2` / `fps: 30` 生效；`_start()` 发出的 `cfg["loop"]` 与勾选一致；真实 `MainWindow` 里未勾选；控制器把 `False`/`True` 原样透传 `FolderSource`；`FolderSource` 默认值 `False`；不传 config 向后兼容。`compileall` 退出码 0。提交 **`e3a4468`** |
 | m03236 | 用户：「更新git和设计文档还有记忆，arduino文件夹也提交」→ 把用户自己写的 Arduino 固件 `arduino/sketch_oct19a/sketch_oct19a.ino`（43 行）**纳入版本库**，并据此改写文档：**串口报文格式不再是未决项** —— 固件认裸 `'1'`/`'0'`，`'1'` 开**喷气阀** `PULSE_MS=100ms` 自动关、`'0'` 立即关（放行）、`Serial.begin(115200)`；我此前提议的「字母+数字」(`D1`/`D0`/`F50`) **正式作废**。由此**确证** `TARGET_NUMBERS` 是不良品编号（`1`=NG=吹掉），原先的【推断】升级为【已确证】。设计文档 §9 重写、§5.1 目录树补 `arduino/`、§6.4.1 改口径、§12 表头 6→5 且 **Q3 关闭一半**（格式已定，剩「每帧发还是每颗发」+ `send_on_change_only: true` 会让连续两颗 NG 只吹第一颗）；本文件新增 §5.4.1、§2 改写、§3 其他段、模块表、§9 未验证段 |
+| m03412 | 用户：「我需要确保每一张图片都要识别到，对于每一张图片都需要发出对应的处理信号」→ **Q5 由此裁定：不许丢帧，每帧必发一个字节**。改了 5 个文件：`app/workers.py`（队列不设上限、`submit` 不再丢最旧、异常也产出 `status="error"` 结果、`finally` 里发 `frame_processed`）；`infra/image_source.py`（`BaseSource` 加 `read_failed` + `frame_done`；`FolderSource` 改 single-shot 定时器、一帧在飞；`CameraSource` 改 `threading.Event` 等 ack、不再按 fps 闷头读；`cv2.imread` 失败改上报而不是跳过）；`app/controller.py`（接 `frame_processed` → `_ack_source()`；新增 `_on_read_failed`；删掉 `send_on_change_only` 分支，串口开着就每帧必发；新增 `frames_in`/`results_out`/`pending` 对账）；`ui/widgets/serial_panel.py`（删「仅变化时发送」勾选，换成一行说明）；`ui/main_window.py`（状态栏加「待处理 N」）。`config.yaml` 删 `serial.send_on_change_only`、改写 `poll_interval_ms` 注释 |
+| — | 【已实测】`_verify_every_frame.py` 25 项全过：A 组 `test3` 12 张、`interval_ms=0`（最快节奏）→ `frames_in=12 / results_out=12 / 串口字节=12 / CSV 行=12 / 队列残留=0 / 最大积压=0`，且串口字节序列 `[1,1,1,1,1,0,1,0,1,0,1,0]` 与 CSV 的 `output_value` 逐条一致；B 组「1 好图 + 1 坏图」→ 2/2/2/2，坏图 `status=read_failed`、进了 CSV、也发了 `'0'`。UI 冒烟 `_verify_ui_smoke.py` 12 项全过（状态栏 `待处理 0`、喂一条结果后 `已处理 1 / 命中 1 / 待处理 0`、坏图 `frame=None` 进历史显示「无图」）。`compileall` 退出码 0；`test/run_app.py --check` 自检全部通过；离屏 GUI 起 14 秒无异常。**`CameraSource` 的新等待逻辑无硬件，未实测** |

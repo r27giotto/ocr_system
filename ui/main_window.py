@@ -120,8 +120,6 @@ class MainWindow(QMainWindow):
         self.serial_panel.refresh_requested.connect(self._on_refresh_ports)
         self.serial_panel.open_requested.connect(self._on_open_serial)
         self.serial_panel.close_requested.connect(self._on_close_serial)
-        self.serial_panel.chk_on_change.stateChanged.connect(
-            lambda s: self.controller.set_send_on_change_only(bool(s)))
 
         # 控制器 → UI
         self.controller.engine_status.connect(self.model_panel.set_loaded)
@@ -182,6 +180,9 @@ class MainWindow(QMainWindow):
             f"已处理 {s['total']}",
             f"命中 {s['hit']}",
             f"平均 {avg:.1f}ms",
+            # 收到的帧 - 已出的结果：停在 0/1 说明没有积压，
+            # 一直往上涨就说明有帧没被处理（这一版应该恒为 0/1）
+            f"待处理 {self.controller.pending}",
         ]
         if res is not None:
             # 显示 G / NG（与 ResultPanel、历史面板、图像叠层一致）

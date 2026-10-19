@@ -1,5 +1,5 @@
 from PyQt6.QtWidgets import (
-    QGroupBox, QComboBox, QPushButton, QLabel, QCheckBox,
+    QGroupBox, QComboBox, QPushButton, QLabel,
     QHBoxLayout, QVBoxLayout, QFormLayout
 )
 from PyQt6.QtCore import pyqtSignal
@@ -31,8 +31,12 @@ class SerialPanel(QGroupBox):
         self.sent_label = QLabel("已发送: 0")
         self.error_label = QLabel("错误: 0")
 
-        self.chk_on_change = QCheckBox("仅变化时发送")
-        self.chk_on_change.setChecked(False)
+        # ★ 不再提供「仅变化时发送」：固件是「收到 '1' 吹一次、收到 '0' 立刻关」，
+        #   必须**每张图发一个字节**，才能做到一颗一动作。连续两颗 NG 若只在
+        #   变化时发，第二颗就不会吹。
+        self.per_frame_label = QLabel("每张图发 1 字节：'1'=NG 吹阀 / '0'=G 放行")
+        self.per_frame_label.setStyleSheet("color: #666;")
+        self.per_frame_label.setWordWrap(True)
 
         self.btn_refresh.clicked.connect(self.refresh_requested.emit)
         self.btn_open.clicked.connect(
@@ -63,7 +67,7 @@ class SerialPanel(QGroupBox):
         v.addLayout(btn_row)
         v.addWidget(self.status_label)
         v.addLayout(stat_row)
-        v.addWidget(self.chk_on_change)
+        v.addWidget(self.per_frame_label)
 
     def set_ports(self, ports: list[dict]):
         current = self.port_combo.currentData()
@@ -91,7 +95,3 @@ class SerialPanel(QGroupBox):
     def update_stats(self, sent: int = 0, errors: int = 0, **kwargs):
         self.sent_label.setText(f"已发送: {sent}")
         self.error_label.setText(f"错误: {errors}")
-
-    @property
-    def send_on_change_only(self) -> bool:
-        return self.chk_on_change.isChecked()
