@@ -47,10 +47,26 @@
 | 配置 | 常量**全部**放 `config.yaml`，代码里不硬编码 | `config.yaml` |
 | 单一配置文件 | 是，就一个 `config.yaml` | 用户原始要求 |
 
-### ★ 尚未得到用户确认的一点
+### ✅ 串口报文格式：已由 Arduino 固件定案（m03236）
 
-**串口报文格式**：「字母 + 数字」，如 `D1`/`D0`（判定结果）、`F50`（特征值）。
-这是**我提的建议**，用户从头到尾没有明确同意过。实现串口前必须再确认一次。
+原「尚未确认」的那一条**已经不用再问了**。用户在
+`E:\Python Project\ocr_system\arduino\sketch_oct19a\sketch_oct19a.ino` 里写出了接收端，
+它认的就是**裸字符 `'1'` / `'0'`**：
+
+| 收到 | 固件动作 |
+|---|---|
+| `'1'` | `digitalWrite(VALVE_PIN=8, HIGH)` 开**喷气阀** → 非阻塞计时 `PULSE_MS = 100` ms 后自动关阀；`LED_PIN=13` 跟随脉冲 |
+| `'0'` | 立即关阀（注释：急停/复位用），不吹气 |
+| 其它 | 忽略 |
+
+`Serial.begin(115200)` 与 Python 侧一致。→ 我此前建议的「字母+数字」(`D1`/`D0`/`F50`)
+**作废**，实现里的裸字符才是对的。
+
+**语义确证**：`'1'` 接喷气阀 → `1` = **NG = 吹掉不良品**，`0` = G = 放行。
+这用硬件确认了 §5.4 / §6.3 里原先只是【推断】的「`TARGET_NUMBERS` 是不良品编号」。
+
+⚠️ **因此，如果哪天要「连续两颗 NG 都吹」，`serial.send_on_change_only` 必须保持
+`false`** —— 勾成 true 后值不变就不发，固件收不到第二个 `'1'`，第二颗就不吹。
 
 ### 已被砍掉的（scope cuts，别再捡回来）
 
@@ -60,7 +76,10 @@
 | 速度指标 | 「你目前不用管速度」 | m00078 |
 | Arduino 串口协议 | 不用考虑 | m00075 |
 
-→ 所以 `config.yaml` 的 `serial:` 段目前**只服务一个简化版串口**，没有握手/应答协议。
+→ 前两条仍有效（Python 侧不实现下游逻辑、不追速度）。第三条**已由用户自己补上**：
+他写了固件并（m03236）要求把 `arduino/` 一起提交，所以协议不再是「不用考虑」，
+而是「已由固件确定、Python 侧照着发裸字节」。`config.yaml` 的 `serial:` 段仍只服务
+这个简化版串口，没有握手/应答。
 
 ---
 
@@ -159,10 +178,13 @@ os.environ.setdefault("PADDLE_PDX_CACHE_HOME", "<项目根>/models")
 
 ### 其他
 
-- **已是 git 仓库**（分支 `main`；初始化与提交见第 12 节时间线）
+- **已是 git 仓库**（分支 `main`；初始化与提交见第 12 节时间线；**无 remote**）
 - `logs/` 已存在：`results.csv` 只有 1 行（表头）、`app.log` 空
 - `resources/icons/` 存在但**是空的**
 - 存在 `.idea/`（PyCharm 工程）
+- `arduino/` 是**用户自己写的 Arduino 接收端固件**（m03236，独立于 Python 工程）：
+  `arduino/sketch_oct19a/sketch_oct19a.ino`（43 行）—— 收 `'1'` 开喷气阀 100 ms、
+  收 `'0'` 立即关，`Serial.begin(115200)`。协议语义见 §2「串口报文格式」
 
 ---
 
@@ -340,6 +362,37 @@ number ∈ target_numbers({12,19,20,25,37,41,43})      → 1
 
 → 即 `output_value == 1` 等价于 `hit == True`。
 
+**语义已由固件确认（m03236）**：`1` = **NG = 吹掉不良品**（Arduino 把 `'1'` 接到喷气阀），
+`0` = G = 放行。所以 `TARGET_NUMBERS` 是**不良品编号**，不是良品编号。
+
+### 5.4.1 串口输出与 Arduino 接收端（m03236）
+
+Python 侧（`infra/serial_service.py` 的 `send_value`）只发**裸单字节**：
+`output_value == 1` → `b'1'`，否则 → `b'0'`。波特率 `115200`（与固件一致），
+`bytesize=8 / parity=N / stopbits=1 / timeout=0.05 / write_timeout=0.2`。
+
+接收端 `E:\Python Project\ocr_system\arduino\sketch_oct19a\sketch_oct19a.ino`（43 行，用户写的）：
+
+```cpp
+const int VALVE_PIN = 8;        // 驱动 MOSFET 栅极（经光耦）
+const int LED_PIN   = 13;       // 板载指示灯，跟随脉冲
+const unsigned long PULSE_MS = 100;   // ⚠️ 必须按喷气嘴规格调（典型电磁阀 10~50ms）
+
+Serial.begin(115200);
+loop():
+  收 '1' → VALVE 拉高 + 记 pulseStart，pulsing=true
+  收 '0' → VALVE 拉低，pulsing=false          // 急停/复位
+  其它   → 忽略
+  到 PULSE_MS 且 pulsing → VALVE 自动拉低     // 非阻塞，不 delay()
+```
+
+要点：
+- **`'0'` 不吹气**，只是「确保阀关着」，所以识别失败发 `'0'` ＝ **放行这颗**
+- `PULSE_MS = 100` 是**吹气时长**，不是产线节拍；太短阀打不开、太长浪费气且发热
+- ⚠️ 固件对**每个收到的 `'1'`** 吹一次。若把 `serial.send_on_change_only` 勾成 `true`，
+  「连续两颗 NG」只会发第一个 `'1'`，**第二颗不会吹** → 要逐颗吹就保持 `false`
+- 固件**没有**收「频率」的代码；早期方案里的 `F50` 之类频率报文从未实现，也别再加
+
 ### 5.5 关键常量（`config.yaml` 里的值都是从这里来的）
 
 ```
@@ -367,7 +420,8 @@ demo 用的样张目录：E:\Python Project\project_0\data\test3   （11 张图�
 | `core/recognizer.py` | 145 | `Recognizer.recognize` 多角度循环 + **`_aggregate_by_number` 按数字聚合分选结果**（无早退） | ✅ 已实测（真实样张，见 §5.3） |
 | `core/pipeline.py` | 57 | `OcrPipeline.run_on_image` 单帧端到端 | ✅ 已实测（真实模型 + 12 张真实样张，11/12 ok） |
 | `infra/image_source.py` | — | `FolderSource` / `CameraSource` | ⚠️ **依赖 Qt，见缺陷⑥** |
-| `infra/serial_service.py` | — | 简化版串口 | ⚠️ 未跑过 |
+| `infra/serial_service.py` | — | 简化版串口；发裸 `b'1'`/`b'0'`（协议已由固件定案，见 §5.4.1） | ⚠️ 未接过真设备 |
+| `arduino/sketch_oct19a/sketch_oct19a.ino` | 43 | **用户写的**接收端固件：`'1'`→开阀 100ms→自动关，`'0'`→立即关 | ⚠️ 未烧录实测 |
 | `infra/csv_logger.py` | 39 | CSV 记录 | ⚠️ **有截断缺陷，见缺陷①** |
 | `app/controller.py` | — | `AppController`（编排层） | ⚠️ 仅构造验证 |
 | `app/workers.py` | — | `EngineLoadWorker` / `InferenceWorker`（QThread） | ⚠️ 仅 import 验证 |
@@ -654,6 +708,9 @@ self._load_worker.done.connect(self.engine_status.emit)
 **仍然没验证过**：
 
 - 所有 `infra/` 串口、图源、CSV 的实际读写（没插过串口设备、没开过摄像头）
+- **Arduino 侧完全是未验证的**：`arduino/sketch_oct19a/sketch_oct19a.ino` 只做过**读代码**，
+  没烧录、没接阀、没量过 `PULSE_MS=100` 对实际喷气嘴是否合适
+- 「Python 发字节 → Arduino 吹阀」**整条链路从未联合调试过**（串口和固件各自都只是静态检查）
 - 全部 GUI 交互（只点过「加载模型」按钮，其余按钮没点过）
 - 实时视频流（只跑过离屏、单帧、静态样张）
 - `test/test_rename.py` 的重命名行为
@@ -747,3 +804,5 @@ $env:PADDLE_PDX_DISABLE_MODEL_SOURCE_CHECK = 'True'
 | m01818 | 用户：「按照修法1修改」→ 聚合分由 `Σscore` 改为 **`Σ(score - conf_threshold)`**（边际分），并**四舍五入 6 位**去掉浮点尾差（否则「边际相同→比票数」这一级会被 `0.9+0.9-1.0` 与 `0.9+0.7+0.7-1.5` 的 1e-16 误差架空）；`debug_aggregate` 的打印前缀 `sum=` 改成 `margin=`；`_aggregate_by_number` 增加 `threshold` 参数 |
 | — | 【已实测】`_verify_margin.py` 全过（T1–T13）：T1 边际聚合分 `[0.7, 0.55, 0.49]`；T2 **两张 0.8 的票胜一张 0.99**（0.6 > 0.49，多角度互证的性质保住了）；T3 三角度全跑（无早退）；T4 0.499 拒 / 0.5 收；T5 超范围跳过；**T5b 用 `20.png` 的真实票复现：旧规则选 `2`（留证）、新规则 `20` 边际 0.9990 > `2` 的 0.5871**；T6–T11 丢 0 / 清洗非数字 / 转 180° / 平局三档 / `best_angle` / 空候选；T12 真实模型 `20.png → 20`、`12.png → 12`、`37.png → 37`；**T13 完整 `OcrPipeline` 跑 12 张 → 11/12 ok，命中 7 张（比修前多出 `20.png`）**，`20.png` 现在是 `conf=0.9997 angle=-90°` |
 | m01887 | 用户：「修改前端界面的默认配置，默认不勾选循环」→ `SourcePanel.__init__(self, config: dict = None)` 从 `config["source"]` 读初值（`type`/`folder_path`/`camera_index`/`fps`/`poll_interval_ms`/`loop`，缺键兜底 `folder`/""/0/15/300/**false**），**循环默认不勾选**（原为硬编码 `setChecked(True)`）；`ui/main_window.py:38` 改为 `SourcePanel(config.get("source", {}))`；`FolderSource.__init__` 的 `loop` 默认 `True`→`False`；`config.yaml` 的 `source:` 段加注释说明它是面板初值。**缺陷清单 ④ 就此关闭**（`source:` 段以前根本没人读）|
+| — | 【已实测】`_verify_loop.py` 18 项全过：默认不勾选；`config` 里 `loop: true` 时勾上；`type: camera` / `camera_index: 2` / `fps: 30` 生效；`_start()` 发出的 `cfg["loop"]` 与勾选一致；真实 `MainWindow` 里未勾选；控制器把 `False`/`True` 原样透传 `FolderSource`；`FolderSource` 默认值 `False`；不传 config 向后兼容。`compileall` 退出码 0。提交 **`e3a4468`** |
+| m03236 | 用户：「更新git和设计文档还有记忆，arduino文件夹也提交」→ 把用户自己写的 Arduino 固件 `arduino/sketch_oct19a/sketch_oct19a.ino`（43 行）**纳入版本库**，并据此改写文档：**串口报文格式不再是未决项** —— 固件认裸 `'1'`/`'0'`，`'1'` 开**喷气阀** `PULSE_MS=100ms` 自动关、`'0'` 立即关（放行）、`Serial.begin(115200)`；我此前提议的「字母+数字」(`D1`/`D0`/`F50`) **正式作废**。由此**确证** `TARGET_NUMBERS` 是不良品编号（`1`=NG=吹掉），原先的【推断】升级为【已确证】。设计文档 §9 重写、§5.1 目录树补 `arduino/`、§6.4.1 改口径、§12 表头 6→5 且 **Q3 关闭一半**（格式已定，剩「每帧发还是每颗发」+ `send_on_change_only: true` 会让连续两颗 NG 只吹第一颗）；本文件新增 §5.4.1、§2 改写、§3 其他段、模块表、§9 未验证段 |
