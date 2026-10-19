@@ -67,6 +67,21 @@
 
 ⚠️ **因此，如果哪天要「连续两颗 NG 都吹」，`serial.send_on_change_only` 必须保持
 `false`** —— 勾成 true 后值不变就不发，固件收不到第二个 `'1'`，第二颗就不吹。
+（m03412 起这个选项**已被删除**，见 §6.4 —— 现在就是每帧必发。）
+
+### ✅ 设计问答 Q1–Q6 已全部裁定（m03646）
+
+用户在 m03646 一次性回了四个问题（原话照录）：
+
+| 问题 | 用户回答 | 落到代码/文档上的结论 |
+|---|---|---|
+| **Q1** 识别失败时串口发什么 | 「识别失败时串口发0」 | 选项 (a)，**当前实现即正确，不改代码**。这是**明示接受的取舍**：读不出来的缺陷件会被放行到下游。界面仍用 `?` 区分「没判出来」和「良品」，线上字节不区分。缺陷 D1 关闭为「按用户裁定执行」 |
+| **Q2** 一帧里有几颗标记 | 「每一帧只会出现一颗」 | **一个结果对应一颗标记**，`RecognitionResult` 单结果结构成立，不需要多结果。<br>未明确的一半：是否可能**亮底暗字** —— 当前 `find_roi` 用 `THRESH_BINARY_INV`（只认暗标记/亮底，§5.1），按现状实现 |
+| **Q4** 离线是不是硬约束 | 「最好是离线」 | **偏好而非硬约束**。现状已满足：模型全在 `models/official_models/`、依赖固化，断网可跑。`PP-OCRv5_server_rec` 本地缺失、选中会联网，`config.yaml` 里已加注释警示。今后加依赖/换模型**先问** |
+| **Q6** COM 口接的是什么 | 「COM口连接的时arduino uno r3」 | 目标板 = **Arduino Uno R3**（ATmega328P @16 MHz / 2 KB RAM，ATmega16U2 转 USB CDC）。115200 与固件一致。⚠️ **打开串口会因 DTR 拉低导致板子复位，bootloader 约 1.5~2 s，这段收到的字节被丢弃** → `SerialService.open()` 不等待，**打开后立刻跑图时第一颗的判定可能丢掉**，待真机确认（见 §9 下一步） |
+
+→ **至此设计文档 §12 无待决项**。原本 Q3（字节格式）由固件定案、Q5（丢不丢帧）由
+m03412 裁定、Q1/Q2/Q4/Q6 由 m03646 裁定。
 
 ### 已被砍掉的（scope cuts，别再捡回来）
 
@@ -389,9 +404,18 @@ loop():
 要点：
 - **`'0'` 不吹气**，只是「确保阀关着」，所以识别失败发 `'0'` ＝ **放行这颗**
 - `PULSE_MS = 100` 是**吹气时长**，不是产线节拍；太短阀打不开、太长浪费气且发热
-- ⚠️ 固件对**每个收到的 `'1'`** 吹一次。若把 `serial.send_on_change_only` 勾成 `true`，
-  「连续两颗 NG」只会发第一个 `'1'`，**第二颗不会吹** → 要逐颗吹就保持 `false`
+- ⚠️ 固件对**每个收到的 `'1'`** 吹一次。`send_on_change_only` 曾能破坏这一点，
+  **m03412 起该选项已删除**（见 §6.4），现在每帧必发
 - 固件**没有**收「频率」的代码；早期方案里的 `F50` 之类频率报文从未实现，也别再加
+
+#### 接收端板子：**Arduino Uno R3**（m03646 确认）
+
+| 项 | 值 / 影响 |
+|---|---|
+| 板子 | **Arduino Uno R3**：ATmega328P @16 MHz，2 KB RAM，经 **ATmega16U2** 转 USB CDC |
+| 能力 | 固件几十行、单字节协议，资源绰绰有余；`Serial.begin(115200)` 与 Python 侧一致 |
+| COM 口号 | 随插拔变化 → UI 必须有「刷新端口」；`serial.last_port` 仍未接线（缺陷 D3 另一半） |
+| ⚠️ **DTR 自动复位** | **打开串口会拉低 DTR → 板子重启，bootloader 约 1.5~2 s，这段时间收到的字节被丢弃**。`SerialService.open()` 当前不等待，所以「打开串口后立刻跑图」时**第一颗的判定可能丢掉** —— 与 §6.4「每帧必发」冲突，**待真机确认后再定是否加静默期** |
 
 ### 5.5 关键常量（`config.yaml` 里的值都是从这里来的）
 
@@ -781,15 +805,18 @@ self._load_worker.done.connect(self.engine_status.emit)
 
 **仍然没验证过**：
 
-- 所有 `infra/` 串口、图源、CSV 的实际读写（没插过串口设备、没开过摄像头）
+- 所有 `infra/` 串口的实际读写（**没插过串口设备**；图源与 CSV 已用离屏脚本实测，见 §6.4）
 - **Arduino 侧完全是未验证的**：`arduino/sketch_oct19a/sketch_oct19a.ino` 只做过**读代码**，
-  没烧录、没接阀、没量过 `PULSE_MS=100` 对实际喷气嘴是否合适
+  没烧录、没接阀、没量过 `PULSE_MS=100` 对实际喷气嘴是否合适。
+  **板子型号已确认是 Arduino Uno R3**（m03646），但**一次都没插上过**
 - 「Python 发字节 → Arduino 吹阀」**整条链路从未联合调试过**（串口和固件各自都只是静态检查）
+- **Uno R3 的 DTR 自动复位会不会吞掉打开串口后的第一批字节**（§5.4.1）—— 只有真机能回答
 - 全部 GUI 交互（只点过「加载模型」按钮，其余按钮没点过）
-- 实时视频流（只跑过离屏、单帧、静态样张）
+- 实时视频流（只跑过离屏、单帧、静态样张；`CameraSource` 的新等待逻辑**无硬件未实测**）
 - `test/test_rename.py` 的重命名行为
 
-**所以：「core/ 单帧链路正确」现在可以担保；「整条产品链路正确」仍不能担保。**
+**所以：「core/ 单帧链路 + 不丢帧编排逻辑正确」现在可以担保；「整条产品链路正确」仍不能担保 ——
+只差串口/Arduino 这一段真机。**
 
 ---
 
@@ -799,11 +826,14 @@ self._load_worker.done.connect(self.engine_status.emit)
    - 实测：`E:\Python Project\project_0\data\test3` 12 张 → **11 张 ok、1 张 no_number**（`4.png`）
    - 每张耗时约 222–231ms（首张约 1925ms 含模型加载）；命中 7 张（12/19/20/25/37/41/43）
 2. ~~决定 `20.png` 这个回归怎么处理~~ ✅ **已修**（m01818，边际分求和）→ 见 §5.3.1
-3. 再决定要不要清掉第 7 节的 ①–⑧ 待修缺陷
-4. 设计文档已写成 `docs/superpowers/specs/2026-10-15-ocr-system-design.md`
-   —— 但它**还没定稿交付**：`/brainstorming` 的 builder-check 提出 8 个问题，
-   其中 5 个（Q1/Q2/Q3/Q5/Q6）需要用户裁定后才能更新文档并正式移交。文档 §12 有那张问题表。
-5. 串口报文格式仍需用户拍板（见第 2 节）
+3. ~~设计文档待裁定问题~~ ✅ **Q1–Q6 全部关闭**（m03236 / m03412 / m03646）→ 文档 §12 无待决项
+4. ~~串口报文格式~~ ✅ 已由固件定案（裸 `'1'`/`'0'`）→ 见 §5.4.1
+5. **真机联调串口（Arduino Uno R3）** ← 现在唯一的硬骨头。三项要顺带确认：
+   (a) 打开串口后 **DTR 复位导致的前 1.5~2 s 丢字节**是否真发生 → 决定 `SerialService.open()` 要不要加静默期；
+   (b) `PULSE_MS = 100` 对实际喷气嘴合不合适；
+   (c) `serial.last_port` / `baudrate` 要不要接线到 `SerialPanel`（缺陷 D3 另一半）
+6. 再决定要不要清掉第 7 节剩下的待修缺陷（①CSV 截断、②双重 shutdown、③有效范围重复定义、⑤串口配置未接线、⑦整帧常驻内存、⑧`decide` 的 status 参数）
+7. GUI 全流程点一遍（除「加载模型」外的按钮都没点过）
 
 ---
 
@@ -881,4 +911,5 @@ $env:PADDLE_PDX_DISABLE_MODEL_SOURCE_CHECK = 'True'
 | — | 【已实测】`_verify_loop.py` 18 项全过：默认不勾选；`config` 里 `loop: true` 时勾上；`type: camera` / `camera_index: 2` / `fps: 30` 生效；`_start()` 发出的 `cfg["loop"]` 与勾选一致；真实 `MainWindow` 里未勾选；控制器把 `False`/`True` 原样透传 `FolderSource`；`FolderSource` 默认值 `False`；不传 config 向后兼容。`compileall` 退出码 0。提交 **`e3a4468`** |
 | m03236 | 用户：「更新git和设计文档还有记忆，arduino文件夹也提交」→ 把用户自己写的 Arduino 固件 `arduino/sketch_oct19a/sketch_oct19a.ino`（43 行）**纳入版本库**，并据此改写文档：**串口报文格式不再是未决项** —— 固件认裸 `'1'`/`'0'`，`'1'` 开**喷气阀** `PULSE_MS=100ms` 自动关、`'0'` 立即关（放行）、`Serial.begin(115200)`；我此前提议的「字母+数字」(`D1`/`D0`/`F50`) **正式作废**。由此**确证** `TARGET_NUMBERS` 是不良品编号（`1`=NG=吹掉），原先的【推断】升级为【已确证】。设计文档 §9 重写、§5.1 目录树补 `arduino/`、§6.4.1 改口径、§12 表头 6→5 且 **Q3 关闭一半**（格式已定，剩「每帧发还是每颗发」+ `send_on_change_only: true` 会让连续两颗 NG 只吹第一颗）；本文件新增 §5.4.1、§2 改写、§3 其他段、模块表、§9 未验证段 |
 | m03412 | 用户：「我需要确保每一张图片都要识别到，对于每一张图片都需要发出对应的处理信号」→ **Q5 由此裁定：不许丢帧，每帧必发一个字节**。改了 5 个文件：`app/workers.py`（队列不设上限、`submit` 不再丢最旧、异常也产出 `status="error"` 结果、`finally` 里发 `frame_processed`）；`infra/image_source.py`（`BaseSource` 加 `read_failed` + `frame_done`；`FolderSource` 改 single-shot 定时器、一帧在飞；`CameraSource` 改 `threading.Event` 等 ack、不再按 fps 闷头读；`cv2.imread` 失败改上报而不是跳过）；`app/controller.py`（接 `frame_processed` → `_ack_source()`；新增 `_on_read_failed`；删掉 `send_on_change_only` 分支，串口开着就每帧必发；新增 `frames_in`/`results_out`/`pending` 对账）；`ui/widgets/serial_panel.py`（删「仅变化时发送」勾选，换成一行说明）；`ui/main_window.py`（状态栏加「待处理 N」）。`config.yaml` 删 `serial.send_on_change_only`、改写 `poll_interval_ms` 注释 |
-| — | 【已实测】`_verify_every_frame.py` 25 项全过：A 组 `test3` 12 张、`interval_ms=0`（最快节奏）→ `frames_in=12 / results_out=12 / 串口字节=12 / CSV 行=12 / 队列残留=0 / 最大积压=0`，且串口字节序列 `[1,1,1,1,1,0,1,0,1,0,1,0]` 与 CSV 的 `output_value` 逐条一致；B 组「1 好图 + 1 坏图」→ 2/2/2/2，坏图 `status=read_failed`、进了 CSV、也发了 `'0'`。UI 冒烟 `_verify_ui_smoke.py` 12 项全过（状态栏 `待处理 0`、喂一条结果后 `已处理 1 / 命中 1 / 待处理 0`、坏图 `frame=None` 进历史显示「无图」）。`compileall` 退出码 0；`test/run_app.py --check` 自检全部通过；离屏 GUI 起 14 秒无异常。**`CameraSource` 的新等待逻辑无硬件，未实测** |
+| — | 【已实测】`_verify_every_frame.py` 25 项全过：A 组 `test3` 12 张、`interval_ms=0`（最快节奏）→ `frames_in=12 / results_out=12 / 串口字节=12 / CSV 行=12 / 队列残留=0 / 最大积压=0`，且串口字节序列 `[1,1,1,1,1,0,1,0,1,0,1,0]` 与 CSV 的 `output_value` 逐条一致；B 组「1 好图 + 1 坏图」→ 2/2/2/2，坏图 `status=read_failed`、进了 CSV、也发了 `'0'`。UI 冒烟 `_verify_ui_smoke.py` 12 项全过（状态栏 `待处理 0`、喂一条结果后 `已处理 1 / 命中 1 / 待处理 0`、坏图 `frame=None` 进历史显示「无图」）。`compileall` 退出码 0；`test/run_app.py --check` 自检全部通过；离屏 GUI 起 14 秒无异常。**`CameraSource` 的新等待逻辑无硬件，未实测**。提交 **`8ed7733`** |
+| m03646 | 用户一次回完四个设计问题：**「Q1：识别失败时串口发0；Q2每一帧只会出现一颗；Q4：最好是离线；Q6：COM口连接的时arduino uno r3」** → **设计文档 §12 至此无待决项**。落地：Q1 = 选项 (a)，**当前实现即正确不改代码**，缺陷 D1 关闭为「明示接受」（读不出的缺陷件会放行到下游）；Q2 = **一帧一颗**，单结果数据结构成立（未明确的一半：亮底暗字，仍按 `THRESH_BINARY_INV` 实现）；Q4 = 离线是**偏好非硬约束**，现状已满足，`config.yaml` 给 `PP-OCRv5_server_rec` 加「本地不存在、需联网」注释；Q6 = 板子 **Arduino Uno R3**，新增「接收端板子」表并记下 ⚠️ **DTR 自动复位会让打开串口后的前 1.5~2 s 字节被丢弃**（与 §6.4「每帧必发」冲突，待真机确认是否在 `SerialService.open()` 加静默期）。文档升 **v1.6**（§9 新增板子段、§10 用户定的表 +4 行、§12 表头改「已全部裁定」、§14 下一步重写）；本文件 §2 新增「设计问答 Q1–Q6 已全部裁定」表、§5.4.1 加板子表、§9/§10 重写 |

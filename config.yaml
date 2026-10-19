@@ -9,6 +9,10 @@ target:
   valid_max: 48
 
 models:
+  # 下拉框里的候选清单。前两个已离线可用（在 models/official_models/ 里）。
+  # ⚠️ PP-OCRv5_server_rec **本地没有**，选中它会联网下载 —— 离线环境请勿选
+  #    （用户 m03646：「最好是离线」）。要离线用它，先把该模型目录下载进
+  #    models/official_models/ 再说。
   rec_options:
     - "PP-OCRv6_small_rec"
     - "PP-OCRv6_medium_rec"
