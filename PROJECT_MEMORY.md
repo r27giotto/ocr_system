@@ -1,7 +1,9 @@
 # ocr_system 项目记忆
 
 > **这是本项目的"真相源"。接手前先完整读这里，不要凭代码猜。**
-> 最后更新：2026-10-15 23:49 · 对应代码状态：审计问题「一到四」已修复并验证通过
+> 最后更新：2026-10-25 17:55 · 对应代码状态：「双击快捷方式」启动（不做 exe），换机器自适配
+> （`engine.device: auto`）；m00002 的开始/停止按钮 bug 已修；**m00804 起模型未就绪/加载中不许开跑**
+> （控制器是唯一真源，`test/test_engine_ready.py` 6 组回归）；**已是 git 仓库（分支 `main`，无远程）**
 > 内容分两类，请勿混淆：**【已实测】**＝有命令输出为证；**【未验证】**＝只是读代码推断，从没真正跑过。
 
 ---
@@ -25,6 +27,11 @@
 - `test/test_rename.py` — 调用上面的 `process_image`，按识别结果批量重命名图片
 
 重构原则：**行为必须和 `test/test_ocr2.py` 一致**，只是拆成可复用、可配置、带 GUI 的结构。
+
+**怎么启动（给用户看的）**：双击桌面「OCR 识别系统」图标，或项目根目录的 `OCR系统.lnk`。
+快捷方式指向 `.venv\Scripts\pythonw.exe "main.py"`，起始位置 `E:\ocr_system`，图标 `resources\icons\ocr.ico`。
+**不做 exe**（用户 m00434 定；PyInstaller 方案已整套拆除）—— 所以目标机器上必须有这个 `.venv`，
+换句话说这是「跑得起来的一键图标」，不是「拷走就能用的独立程序」。窗口启动失败时先看 `logs\crash.log`。
 
 ---
 
@@ -50,7 +57,7 @@
 ### ✅ 串口报文格式：已由 Arduino 固件定案（m03236）
 
 原「尚未确认」的那一条**已经不用再问了**。用户在
-`E:\Python Project\ocr_system\arduino\sketch_oct19a\sketch_oct19a.ino` 里写出了接收端，
+`E:\ocr_system\arduino\sketch_oct19a\sketch_oct19a.ino` 里写出了接收端，
 它认的就是**裸字符 `'1'` / `'0'`**：
 
 | 收到 | 固件动作 |
@@ -102,9 +109,9 @@ m03412 裁定、Q1/Q2/Q4/Q6 由 m03646 裁定。
 
 | 项 | 值 |
 |---|---|
-| 解释器 | `E:\Python Project\ocr_system\.venv\Scripts\python.exe` |
+| 解释器 | `E:\ocr_system\.venv\Scripts\python.exe`（**无控制台启动用同目录的 `pythonw.exe`**） |
 | Python | 3.12.10 |
-| venv 管理 | **uv**（base 解释器 `E:\Python312`），uv 可执行文件在 `E:\Python313\Scripts\uv.exe` |
+| venv 管理 | **uv**（base 解释器 `E:\Python312`），uv 可执行文件 `D:\Python312\Scripts\uv.exe`（**`E:\Python313` 下没有 uv**） |
 | 系统其他解释器 | `E:\Python313\python.exe`（默认）、`E:\Python312\python.exe` |
 
 ### ★ 坑：`.venv` 里没有 pip
@@ -116,24 +123,27 @@ No module named pip        (退出码 1)
 
 装包**只能**用 uv：
 ```powershell
-& 'E:\Python313\Scripts\uv.exe' pip install <包名> --python 'E:\Python Project\ocr_system\.venv\Scripts\python.exe'
+& 'D:\Python312\Scripts\uv.exe' pip install <包名> --python 'E:\ocr_system\.venv\Scripts\python.exe'
 ```
+（沙箱下还要先设可写的 `$env:UV_CACHE_DIR`，见 §8.5；装包本身需要一次 `danger-full-access`）
 
 ### 已安装版本 【已实测】
 
 ```
-paddlepaddle            3.3.1        ← 能 import，OK
+paddlepaddle-gpu         3.3.0        ← CUDA 版（is_compiled_with_cuda()=True，本机 1 张卡，Compute Capability 6.1）
+                                      CUDA 运行库来自 8 个 nvidia-* cu11 wheel，**不在 paddle/libs 里**
 paddlex                 3.7.2        ← 必须 >=3.7.2，见第 8 节
 numpy                   2.3.5        ← paddlex 3.7.2 要求 numpy<2.4
 opencv-contrib-python   5.0.0.93     ← 必须是 contrib 版，见第 8 节
 pypdfium2               5.14.0
 python-bidi             0.6.11
-PyQt6                   6.11.0
+PyQt6                   6.11.0       ← 另装 pyqt6-qt6 6.11.2 / pyqt6-sip 13.13.0
 pyserial                3.5
 PyYAML                  6.0.2
 pandas                  3.0.6
 Pillow                  12.3.0
 paddleocr               -- 未安装 --   (不需要，我们直接用 paddlex)
+PyInstaller             -- 未安装 --   (打包方案已废弃，别装)
 ```
 
 > 历史备注：早期排查时 `paddlepaddle` **不在** `pyproject.toml` 也不在 venv 里，`import paddle` 直接
@@ -161,7 +171,7 @@ dependencies = [
 
 ### 模型缓存位置与本地清单 【已实测】
 
-**模型已经搬进项目内**：`E:\Python Project\ocr_system\models\official_models\`（15 个目录，477.1 MB）。
+**模型已经搬进项目内**：`E:\ocr_system\models\official_models\`（15 个目录，477.1 MB）。
 
 做法是 `main.py` / `test/run_app.py` 在**任何 paddlex import 之前**设：
 ```python
@@ -193,9 +203,24 @@ os.environ.setdefault("PADDLE_PDX_CACHE_HOME", "<项目根>/models")
 
 ### 其他
 
-- **已是 git 仓库**（分支 `main`；初始化与提交见第 12 节时间线；**无 remote**）
+- ✅ **已是 git 仓库**（2026-10-25，用户自己装上 git 后建库）：
+  - git 在 **`D:\Git\cmd\git.exe`**（2.56.0.windows.3，装在 `D:\Git`），已写进**机器级 PATH**；
+    但**已经在运行的 shell 不会自动刷新 PATH** —— 老终端里 `git` 报「无法识别」时，
+    执行 `$env:Path = [Environment]::GetEnvironmentVariable('Path','Machine') + ';' + [Environment]::GetEnvironmentVariable('Path','User')` 即可。
+  - 仓库在 `E:\ocr_system\.git`，默认分支 **`main`**，**没有任何远程**（「上传」无处可传）。
+  - 提交者身份是**仓库级**配置（全局为空）：`user.name=ocr_system`、`user.email=ocr_system@localhost`。
+  - 首个提交 **`72a89fa`**：45 文件 / 7,504 行，含 `.gitignore`、`.gitattributes`、`logs/.gitkeep`、`ocr.ico`、`OCR系统.lnk`、`uv.lock`。
+  - `.venv/`（4.6 GB）与 `models/`（477 MB）**不入库**，理由写在 `.gitignore` 注释里。
+  - 早期第 12 节里那些「提交 `xxxxxxx`」是**另一台环境**的历史记录（当时本机还没装 git），别拿它当本地现状。
+
+- ⚠️ `C:\Users\Administrator\Desktop` 在 DSH 沙箱之外，改桌面快捷方式需要一次 `danger-full-access`
 - `logs/` 已存在：`results.csv` 只有 1 行（表头）、`app.log` 空
-- `resources/icons/` 存在但**是空的**
+- `resources/icons/ocr.ico`：**程序图标**（m00434 补，31,055 B，多尺寸 16/24/32/48/64/128/256：深蓝渐变圆角方块 + 白色 Arial Bold「OCR」+ 底下薄荷绿圆角扫描线）
+- **启动方式 = 双击快捷方式**（m00434）：
+  - 根目录 `OCR系统.lnk`、桌面 `OCR 识别系统.lnk`
+  - 目标 `E:\ocr_system\.venv\Scripts\pythonw.exe`，参数 `"E:\ocr_system\main.py"`，起始位置 `E:\ocr_system`，图标 `resources\icons\ocr.ico`
+  - 用 **pythonw**（无控制台窗口）；`main.py` 已处理 `sys.stdout/stderr is None` 的情况
+  - ❌ **不做 exe 了**：PyInstaller 方案已整套拆除（产物 4.47 GB、打包版自检卡住，用户也不需要）
 - 存在 `.idea/`（PyCharm 工程）
 - `arduino/` 是**用户自己写的 Arduino 接收端固件**（m03236，独立于 Python 工程）：
   `arduino/sketch_oct19a/sketch_oct19a.ino`（43 行）—— 收 `'1'` 开喷气阀 100 ms、
@@ -203,7 +228,7 @@ os.environ.setdefault("PADDLE_PDX_CACHE_HOME", "<项目根>/models")
 
 ---
 
-## 4. 配置 `config.yaml`（46 行，用户写的）
+## 4. 配置 `config.yaml`（74 行，用户写的）
 
 ```yaml
 app:        log_dir: "./logs"   csv_output: "./logs/results.csv"   save_csv: true
@@ -211,6 +236,7 @@ target:     numbers: ["12","19","20","25","37","41","43"]   valid_min: 1   valid
 models:     rec_options: [PP-OCRv6_small_rec, PP-OCRv6_medium_rec, PP-OCRv5_server_rec]
             ori_options: [PP-LCNet_x1_0_textline_ori]
             default_rec: PP-OCRv6_small_rec   default_ori: PP-LCNet_x1_0_textline_ori
+engine:     device: "auto"        ← auto / gpu:0 / cpu；GPU 初始化失败自动回退 CPU（m00232 加）
 recognizer: conf_threshold: 0.5   debug_aggregate: true
             early_exit_conf: 0.98 ← 【已废弃，不再被读取】
             angles: [-90,-60,-30,0,30,60,90,180]   drop_zero: true
@@ -218,7 +244,8 @@ preprocess: roi_size: 116   scale: 1.0   clahe_clip: 2.0   clahe_grid: [8,8]
             min_radius: 20   max_radius: 200
 source:     type: "folder"   folder_path: ""   camera_index: 0   fps: 15
             poll_interval_ms: 300   loop: false
-serial:     baudrate: 115200   last_port: "COM3"   send_on_change_only: false
+serial:     baudrate: 115200   last_port: "COM3"
+            （`send_on_change_only` 已于 m03412 删除，别再写回去）
 ```
 
 这些数值全部来自 `test/test_ocr2.py` 的常量，**是调优过的，不要随手改**。
@@ -386,7 +413,7 @@ Python 侧（`infra/serial_service.py` 的 `send_value`）只发**裸单字节**
 `output_value == 1` → `b'1'`，否则 → `b'0'`。波特率 `115200`（与固件一致），
 `bytesize=8 / parity=N / stopbits=1 / timeout=0.05 / write_timeout=0.2`。
 
-接收端 `E:\Python Project\ocr_system\arduino\sketch_oct19a\sketch_oct19a.ino`（43 行，用户写的）：
+接收端 `E:\ocr_system\arduino\sketch_oct19a\sketch_oct19a.ino`（43 行，用户写的）：
 
 ```cpp
 const int VALVE_PIN = 8;        // 驱动 MOSFET 栅极（经光耦）
@@ -446,7 +473,7 @@ ROI_SIZE = 116   SCALE = 1.0   VALID 1..48
 EARLY_EXIT_CONF = 0.98  ← 【已废弃】早退已删除，config 里的这个键不再被读取
 ANGLES = (-90,-60,-45,-30,0,30,45,60,90,180)  ← demo 的；本项目面板默认 (-90,-60,-30,0,30,60,90,180)
 环境（main.py 也照抄了）：OMP_NUM_THREADS=8, MKL_NUM_THREADS=8, cv2.setNumThreads(1)
-demo 用的样张目录：E:\Python Project\project_0\data\test3   （11 张图）
+demo 用的样张目录：E:\Python Project\project_0\data\test3   （11 张图；**2026-10-25 核实该目录已不存在**，仅作历史记录）
 ```
 
 ---
@@ -457,25 +484,29 @@ demo 用的样张目录：E:\Python Project\project_0\data\test3   （11 张图�
 
 | 文件 | 行数 | 内容 | 状态 |
 |---|---|---|---|
-| `core/models.py` | 40 | `RecognitionResult` 数据类 + `ok` / **`output_text`（判定显示 G/NG/? 的唯一真源，见 §6.3）** | ✅ 完整 |
-| `core/parsers.py` | 80 | `parse_rec_output` / `parse_ori_output` | ✅ 完整 |
-| `core/preprocess.py` | 83 | `enhance` / `find_roi` / `rotate` / `build_variants` | ✅ 完整，**真实样张 11/11 通过** |
-| `core/engine.py` | 31 | `EngineManager`（按名缓存 + `threading.Lock`） | ⚠️ 未跑过 |
-| `core/decision.py` | 35 | `DecisionMaker.decide` → 1/0 | ⚠️ 未跑过 |
-| `core/recognizer.py` | 145 | `Recognizer.recognize` 多角度循环 + **`_aggregate_by_number` 按数字聚合分选结果**（无早退） | ✅ 已实测（真实样张，见 §5.3） |
-| `core/pipeline.py` | 57 | `OcrPipeline.run_on_image` 单帧端到端 | ✅ 已实测（真实模型 + 12 张真实样张，11/12 ok） |
-| `infra/image_source.py` | 146 | `FolderSource`（single-shot 定时器，一帧在飞）/ `CameraSource`（`threading.Event` 等 ack）；`read_failed` 上报坏图 | ✅ 已实测（见 §6.4） |
-| `infra/serial_service.py` | 67 | 简化版串口；发裸 `b'1'`/`b'0'`（协议已由固件定案，见 §5.4.1） | ⚠️ 未接过真设备 |
-| `arduino/sketch_oct19a/sketch_oct19a.ino` | 43 | **用户写的**接收端固件：`'1'`→开阀 100ms→自动关，`'0'`→立即关 | ✅ **已烧录，行为符合预期**（m03767）；⚠️ 未与 Python 侧联调 |
-| `infra/csv_logger.py` | 39 | CSV 记录 | ⚠️ **有截断缺陷，见缺陷①** |
-| `app/controller.py` | 163 | `AppController`（编排层）；**每帧必发一个串口字节**，`frames_in`/`results_out` 对账 | ✅ 已实测（见 §6.4） |
-| `app/workers.py` | 79 | `EngineLoadWorker` / `InferenceWorker`；**队列不丢帧**，`frame_processed` 做背压 | ✅ 已实测（见 §6.4） |
-| `ui/main_window.py` | 181 | 主窗口，组装七个面板；竖直 `QSplitter` 分隔历史区，右列包 `QScrollArea`；状态栏显示 `→ G/NG` 与 `待处理 N` | ✅ 已实测（见 §6.1 / §6.3 / §6.4） |
-| `ui/overlay.py` | 36 | 画框 + 结果叠加；**大号 `G`/`NG` 按文字宽度右对齐**，配色同 §6.3 | ✅ 已实测（见 §6.3） |
+| `main.py` | 100 | 入口：pythonw 下 `sys.stdout/stderr is None` → 接 `os.devnull`；`chdir` 到自身目录；`PADDLE_PDX_CACHE_HOME` 必须在 **import paddlex 之前**设；`install_crash_log()` → `logs/crash.log`（含 `faulthandler`）；读 `config.yaml` → QApplication → 组装 → `aboutToQuit → controller.shutdown` | ✅ 已实测（m00434：分离启动存活 45 s） |
+| `core/models.py` | 39 | `RecognitionResult` 数据类 + `ok` / **`output_text`（判定显示 G/NG/? 的唯一真源，见 §6.3）** | ✅ 完整 |
+| `core/parsers.py` | 79 | `parse_rec_output` / `parse_ori_output` | ✅ 完整 |
+| `core/preprocess.py` | 82 | `enhance` / `find_roi` / `rotate` / `build_variants` | ✅ 完整，**真实样张 11/11 通过** |
+| `core/engine.py` | 73 | `EngineManager`（按名缓存 + `threading.Lock`）；**`detect_device()` 自动选 gpu/cpu**、`_create()` 在 GPU 初始化失败时打印 traceback 并**回退 CPU**、`device` 属性暴露当前实际设备（m00232 加） | ✅ 已实测（本机 `gpu:0`，单帧推理出结果） |
+| `core/decision.py` | 34 | `DecisionMaker.decide` → 1/0 | ⚠️ 未跑过 |
+| `core/recognizer.py` | 159 | `Recognizer.recognize` 多角度循环 + **`_aggregate_by_number` 按数字聚合分选结果**（无早退） | ✅ 已实测（真实样张，见 §5.3） |
+| `core/pipeline.py` | 56 | `OcrPipeline.run_on_image` 单帧端到端 | ✅ 已实测（真实模型 + 12 张真实样张，11/12 ok） |
+| `infra/image_source.py` | 162 | `FolderSource`（single-shot 定时器，一帧在飞）/ `CameraSource`（`threading.Event` 等 ack）；`read_failed` 上报坏图；**`stop()` 不发 `finished`**（状态由 controller 统一发，见 §6.4） | ✅ 已实测（见 §6.4） |
+| `infra/serial_service.py` | 66 | 简化版串口；发裸 `b'1'`/`b'0'`（协议已由固件定案，见 §5.4.1） | ⚠️ 未接过真设备 |
+| `arduino/sketch_oct19a/sketch_oct19a.ino` | 42 | **用户写的**接收端固件：`'1'`→开阀 100ms→自动关，`'0'`→立即关 | ✅ **已烧录，行为符合预期**（m03767）；⚠️ 未与 Python 侧联调 |
+| `infra/csv_logger.py` | 38 | CSV 记录 | ⚠️ **有截断缺陷，见缺陷①** |
+| `app/controller.py` | 274 | `AppController`（编排层）；**每帧必发一个串口字节**，`frames_in`/`results_out` 对账；**`source_state` 是输入源运行状态的唯一真源**（只在变化时发，m00002）；**`models_ready`/`_loading` 是模型就绪状态的唯一真源**（未加载/加载中拒开跑、运行中拒绝加载，m00804） | ✅ 已实测（见 §6.4、§7.3） |
+| `app/workers.py` | 87 | `EngineLoadWorker` / `InferenceWorker`；**队列不丢帧**，`frame_processed` 做背压 | ✅ 已实测（见 §6.4） |
+| `ui/main_window.py` | 204 | 主窗口，组装七个面板；竖直 `QSplitter` 分隔历史区，右列包 `QScrollArea`；状态栏显示 `→ G/NG` 与 `待处理 N`；`source_state → set_running`、`source_error → 状态栏`、`engine_busy → source_panel.set_engine_busy` | ✅ 已实测（见 §6.1 / §6.3 / §6.4 / §7.3） |
+| `ui/overlay.py` | 35 | 画框 + 结果叠加；**大号 `G`/`NG` 按文字宽度右对齐**，配色同 §6.3 | ✅ 已实测（见 §6.3） |
 | `ui/widgets/angle_panel.py` | 263 | 固定角度 0°/180° 单独一行（不受负号影响）+ 旋转角度网格（**步长下拉框 5/10/15/20/30**，默认 5° 共 35 格）+「负号」开关 + 全选/仅 0°/反选/默认 | ✅ 已实测 |
 | `ui/widgets/history_panel.py` | 187 | 历史缩略图，**固定 120×120** + 高度可一直往下拖（最小 113px）+ 横/竖滚轴按需 + 清除按钮；卡片显示 `数字 → G/NG/?`，边框色同 §6.3 | ✅ 已实测（见 §6.2 / §6.3） |
-| `ui/widgets/result_panel.py` | 65 | 结果显示；**大方框显示 `G`/`NG`/`?`**（底色绿/红/橙），tooltip 给出原始 `output_value` | ✅ 已实测（见 §6.3） |
-| `ui/widgets/*.py`（其余四个） | — | 模型/源/串口/图像面板 | ⚠️ 仅 import 验证 |
+| `ui/widgets/result_panel.py` | 64 | 结果显示；**大方框显示 `G`/`NG`/`?`**（底色绿/红/橙），tooltip 给出原始 `output_value` | ✅ 已实测（见 §6.3） |
+| `ui/widgets/model_panel.py` | 102 | 识别模型下拉（`rec_options`）+ 方向模型下拉 + 加载按钮 + **状态标签**（加载中/已加载：名/失败原因/**切换未加载**提示，m00804） | ✅ 已实测（加载联动，见 §7.3） |
+| `ui/widgets/source_panel.py` | 149 | 输入源（文件夹/单图/摄像头）+ 路径 + 摄像头号/FPS/间隔/循环 + 开始/停止；`set_running()` / `set_engine_busy()` 改状态后统一走 `_apply_buttons()`（加载中禁用「开始」并给 tooltip，m00804） | ✅ 开始/停止与加载联动已实测（`test_source_state.py`、`test_engine_ready.py`），其余控件未点过 |
+| `ui/widgets/serial_panel.py` | 97 | 串口选择/连接/断开 + 「每帧必发」说明 | ⚠️ 仅 import 验证 |
+| `ui/widgets/image_view.py` | 49 | 主图显示（`QLabel` + 等比例缩放） | ✅ 已实测 |
 
 `core/models.py` 的 `RecognitionResult` 字段（写代码时对齐这个）：
 ```python
@@ -651,6 +682,21 @@ AppController + MainWindow(真配置)        构造成功，标题 "OCR 识别�
   面板: [ModelPanel, SourcePanel, AnglePanel, ResultPanel, SerialPanel, HistoryPanel, ImageView]
 ```
 
+### 7.3 ✅ 已修：模型未就绪 / 加载中不许开跑（m00804，D13 / J5）
+
+用户看完我给的 J5 分析后拍板「按 ①+②+④ 直接改」。**原状**：`load_models()` 只起线程、不记任何「已加载」状态；`start_source()` 完全不看模型就开跑；而加载线程持着 `EngineManager` 的 `threading.Lock`，`core/recognizer.py:105` 的 `rec = self.engine.get_rec(self.rec_model_name)` 要拿同一把锁 → **加载中开跑会把输入源线程堵住**；更糟的是 `load_models()` 一开头就 `rec.set_models(新名字)`，**加载失败后每一帧**都抛 `No engine bindings registered for model '<名>'`；`engine_status` 又不带模型名，切下拉框没点加载界面仍绿色「已加载」。
+
+| 改动 | 位置 |
+|---|---|
+| `models_ready` / `engine_loading` 属性 + `_loaded`/`_loading`/`_load_worker` 状态 | `app/controller.py:88-95` |
+| `start_source` 两道闸：加载中、“模型未加载，请先点「加载模型」” | `app/controller.py:141-152` |
+| 运行中拒绝加载：“检测正在运行，请先点「停止」再加载模型” | `app/controller.py:100-103` |
+| `rec.set_models()` 从 `load_models()` 开头**移到加载成功之后** | `app/controller.py:118-126`（`_on_load_done`） |
+| `engine_status(ok, msg, rec_name)` 加模型名；新增 `engine_busy(bool)` | `app/controller.py:27-28` |
+| 加载中禁用两个下拉框 + 「开始」；`_refresh_hint()` 如实显示「已加载 A（当前选 B 未加载）」 | `ui/widgets/model_panel.py`、`ui/widgets/source_panel.py:set_engine_busy` |
+
+**回归**：新增 `test/test_engine_ready.py`（189 行，6 组，离屏、paddlex 桩掉、不加载真模型）——未加载被拒 / 加载中被拒 / 加载失败且模型名不污染 / 成功后可开跑 / 切换未加载如实提示 / 运行中拒绝加载。`test/test_source_state.py` 同步加 `mark_models_loaded(...)`（否则 m00804 之后它的「开始」全会被拒）。
+
 ### ⚠️ 待修（**用户尚未要求修**，但会咬人）
 
 | # | 位置 | 问题 | 建议 |
@@ -681,15 +727,15 @@ AppController + MainWindow(真配置)        构造成功，标题 "OCR 识别�
 
 **用户要求**：「修改前端界面的默认配置，默认不勾选循环」。
 
-- `E:\Python Project\ocr_system\ui\widgets\source_panel.py`：`SourcePanel.__init__(self, config: dict = None)`，
+- `E:\ocr_system\ui\widgets\source_panel.py`：`SourcePanel.__init__(self, config: dict = None)`，
   从 `config["source"]` 读初值 —— `type`（选 radio）/ `folder_path`（填路径框）/
   `camera_index` / `fps` / `poll_interval_ms` / `loop`；**缺键时兜底 `folder` / "" / 0 / 15 / 300 / false**。
   `self.loop_check.setChecked(bool(cfg.get("loop", False)))` —— 原来是硬编码
   `setChecked(True)`。界面上改动**不写回** config.yaml。
-- `E:\Python Project\ocr_system\ui\main_window.py:38`：`SourcePanel()` → `SourcePanel(config.get("source", {}))`。
-- `E:\Python Project\ocr_system\infra\image_source.py:23`：`FolderSource.__init__` 的
+- `E:\ocr_system\ui\main_window.py:38`：`SourcePanel()` → `SourcePanel(config.get("source", {}))`。
+- `E:\ocr_system\infra\image_source.py:23`：`FolderSource.__init__` 的
   `loop` 默认值 `True` → **`False`**（控制器一直显式传参，改默认值只为消除隐患）。
-- `E:\Python Project\ocr_system\config.yaml`：`source:` 段加注释说明它是面板初值、`loop` 默认 false。
+- `E:\ocr_system\config.yaml`：`source:` 段加注释说明它是面板初值、`loop` 默认 false。
   值仍是 `type: folder` / `fps: 15` / `poll_interval_ms: 300` / `loop: false`。
 
 **数据链路（已实测）**：`loop_check.isChecked()` → `SourcePanel._start()` 的
@@ -766,12 +812,18 @@ engine_status: ok=True   msg=模型已加载
 
 ### 8.5 遗留的环境限制（**不是代码 bug，别去修代码**）
 
-- ~~DSH 沙箱下读不到 `C:\Users\14734\.paddlex`~~ → **已通过把模型搬进项目内解决**（见第 3 节）。
+- ~~DSH 沙箱下读不到 `C:\Users\<用户>\.paddlex`~~ → **已通过把模型搬进项目内解决**（见第 3 节）。
   现在 `models/` 在工作区内，受限会话也能读，`test/run_app.py --check` 的模型检查项从 WARN 变成 OK。
 - 沙箱下 `.venv` 是**只读**的，`uv pip install` 会 `Failed to create directory ... 拒绝访问`，
   装包必须用一次性非受限执行。
-- uv 默认缓存在 `C:\Users\14734\AppData\Local\uv\cache` 同样被拒，
-  需把 `UV_CACHE_DIR` 指到工作区内（本项目用 `.uv-cache/`，已加入 `.gitignore`）。
+- uv 默认缓存（`C:\Users\<用户>\AppData\Local\uv\cache`，本机是 `Administrator`）同样被拒，
+  需把 `UV_CACHE_DIR` 指到工作区内（临时目录用完即删；历史上用过 `.uv-cache/`）。
+- **写权限只覆盖工作区根目录（2026-10-25 实测）**：`E:\ocr_system\test\..`、`app\..`、`ui\..`
+  这类**已存在**的子目录一律 `PermissionError [Errno 13]`（`icacls` 看得到 ACL 是 `Authenticated Users:(M)`，
+  但沙箱用受限令牌 + 专用 SID `S-1-4-…`，既有子目录上没有这条 ACE）→ 表现是
+  `compileall` 在子目录 `.pyc` 上失败、`tempfile.mkdtemp()` 建的目录也写不进。
+  绕过办法：临时文件/日志放**工作区根目录**，目录用 `os.makedirs()` 新建（它会继承父目录的沙箱 SID ACE，
+  而 `mkdtemp` 按 0o700 建目录、生成只给 owner 的 DACL，受限令牌反而进不去）。
 
 ### 8.6 模型读取位置（2026-10-16 变更，**这是现在的正确答案**）
 
@@ -834,6 +886,8 @@ self._load_worker.done.connect(self.engine_status.emit)
 - `'0'` 提前关阀会不会掐断脉冲（§5.4.1，取决于帧间隔，当前 220ms 不触发）
 - **DTR 复位是否吞掉「第一颗」判定**：整体流程不受影响，但没单独数过亮灯次数
 - 全部 GUI 交互（除「加载模型」「开始/停止」外的按钮没点过）
+- **双击快捷方式、窗口真的画在屏幕上** —— 只验证到等价启动路径（m00434 用 `cmd /c start pythonw main.py`：
+  存活 45 s、`logs/crash.log` 为空、模型加载 + 界面构造正常），沙箱里起不出看得见的窗口
 - 实时视频流（只跑过离屏、单帧、静态样张；`CameraSource` 的新等待逻辑**无硬件未实测**）
 - `test/test_rename.py` 的重命名行为
 
@@ -860,28 +914,44 @@ self._load_worker.done.connect(self.engine_status.emit)
 8. `serial.last_port` / `baudrate` 要不要接线到 `SerialPanel`（缺陷 D3 另一半）
 9. 再决定要不要清掉第 7 节剩下的待修缺陷（①CSV 截断、②双重 shutdown、③有效范围重复定义、⑤串口配置未接线、⑦整帧常驻内存、⑧`decide` 的 status 参数）
 10. GUI 全流程点一遍（除「加载模型」「开始/停止」外的按钮都没点过）
+11. 双击桌面 `OCR 识别系统.lnk` 确认真机界面能起来 —— 沙箱里已验证等价启动路径（`cmd /c start pythonw main.py` 存活 45 s、`logs/crash.log` 为空、模型加载 + 界面构造正常），但沙箱内无法确认窗口真画在屏幕上
 
 ---
 
 ## 11. 常用命令
 
 ```powershell
+# ★ 日常：双击根目录的 OCR系统.lnk（或桌面的「OCR 识别系统」）即可启动，无控制台窗口。
+# 下面这些是调试用。
+
 # 解释器（.venv 里没有 pip，装包用 uv）
-$py = 'E:\Python Project\ocr_system\.venv\Scripts\python.exe'
-$env:PYTHONPATH = 'E:\Python Project\ocr_system'
+$py = 'E:\ocr_system\.venv\Scripts\python.exe'
+$env:PYTHONPATH = 'E:\ocr_system'
 
 # 语法检查（全部模块）
 & $py -m compileall -q core infra app ui main.py ; "exit=$LASTEXITCODE"
 
-# 启动 GUI —— 必须在项目根目录！main.py:18 用相对路径读 config.yaml
-Set-Location 'E:\Python Project\ocr_system'
+# 启动 GUI —— 必须在项目根目录！main.py 按自身路径读 config.yaml
+Set-Location 'E:\ocr_system'
 & $py main.py
 
-# 装包
-& 'E:\Python313\Scripts\uv.exe' pip install <包名> --python $py
+# 两套常驻回归（都离屏、不加载真模型，几秒跑完；EXIT=0 即通过）
+$env:QT_QPA_PLATFORM  = 'offscreen'
+$env:PYTHONIOENCODING = 'utf-8'   # 否则中文断言消息在 GBK 控制台是乱码（不影响结果）
+& $py -u test\test_source_state.py   # 开始/停止/再开始的按钮状态（m00002）
+& $py -u test\test_engine_ready.py   # 未加载/加载中/加载失败不许开跑（m00804）
+
+# 装包（uv 在 D:\Python312，不在 E:\Python313；沙箱下先设可写的 UV_CACHE_DIR）
+& 'D:\Python312\Scripts\uv.exe' pip install <包名> --python $py
 
 # 让 PaddleX 跳过联网检查（离线/无网时有用）
 $env:PADDLE_PDX_DISABLE_MODEL_SOURCE_CHECK = 'True'
+
+# git（`D:\Git\cmd\git.exe`，已写进机器级 PATH；老终端里报「无法识别」时先刷新 PATH，见 §2）
+$env:Path = [Environment]::GetEnvironmentVariable('Path','Machine') + ';' + [Environment]::GetEnvironmentVariable('Path','User')
+git status                      # .venv/ 与 models/ 被 .gitignore 挡住，不会出现在待提交里
+git log --oneline -5
+git add -A ; git commit -m "说明"
 ```
 
 **若要在无显示器环境构造 GUI**：加 `$env:QT_QPA_PLATFORM = 'offscreen'`。
@@ -941,3 +1011,17 @@ $env:PADDLE_PDX_DISABLE_MODEL_SOURCE_CHECK = 'True'
 | m03646 | 用户一次回完四个设计问题：**「Q1：识别失败时串口发0；Q2每一帧只会出现一颗；Q4：最好是离线；Q6：COM口连接的时arduino uno r3」** → **设计文档 §12 至此无待决项**。落地：Q1 = 选项 (a)，**当前实现即正确不改代码**，缺陷 D1 关闭为「明示接受」（读不出的缺陷件会放行到下游）；Q2 = **一帧一颗**，单结果数据结构成立（未明确的一半：亮底暗字，仍按 `THRESH_BINARY_INV` 实现）；Q4 = 离线是**偏好非硬约束**，现状已满足，`config.yaml` 给 `PP-OCRv5_server_rec` 加「本地不存在、需联网」注释；Q6 = 板子 **Arduino Uno R3**，新增「接收端板子」表并记下 ⚠️ **DTR 自动复位会让打开串口后的前 1.5~2 s 字节被丢弃**（与 §6.4「每帧必发」冲突，待真机确认是否在 `SerialService.open()` 加静默期）。文档升 **v1.6**（§9 新增板子段、§10 用户定的表 +4 行、§12 表头改「已全部裁定」、§14 下一步重写）；本文件 §2 新增「设计问答 Q1–Q6 已全部裁定」表、§5.4.1 加板子表、§9/§10 重写 |
 | m03767 | 用户：「结合arduino目录下的文件，arduino烧录后能够跑通，符合预期」→ **固件已烧录并验证通过**（`arduino/sketch_oct19a/sketch_oct19a.ino` 43 行：`'1'` 触发、`'0'` 关闭、100ms 自动收）。据此把 §5.4.1 的「烧录状态」改为 ✅，§9 未验证段、§10 下一步、模块表同步。**同时读固件发现一个隐式耦合**：`'0'` 不是空操作，而是 `digitalWrite(VALVE_PIN, LOW)` + `pulsing=false`，所以**帧间隔一旦 < `PULSE_MS=100`，后继那颗 G 的 `'0'` 会掐断上一颗 NG 的吹气**；现在单帧约 220ms 不会触发，但换快模型/少勾角度就会。解耦要么 Python 侧不发后继 `'0'`（破坏「每帧必发」），要么固件改成「不打断正在进行的脉冲」—— 属固件语义选择，待用户定。**仍未验证**：`PULSE_MS` 对实际喷气嘴是否合适、DTR 复位是否吞字节、Python 侧到真板子这一跳 |
 | m03833 | 用户：「我运行run_app.py跑图之后，对于NG信号arduino会亮灯」→ **Python → 真板子 这一跳打通**：`SerialService` 打开 COM 口、每帧发一个字节、NG 帧固件拉高 `VALVE_PIN`+`LED_PIN`。至此「图像 → OCR → G/NG → 串口 → 板子输出」主链**全段实测**。§5.4.1 板子表新增「Python 侧已驱动成功」行、DTR 行改为「不影响整体流程、但第一颗是否被吞未单独验证」；§9 未验证段收缩为「气动阀是否真吹料 + GUI 其余按钮 + 摄像头」；§10 下一步改为「接气源 + 喷气嘴验证真正吹掉料」|
+| m00002 | 用户（配输入源面板截图）：「点击开始后，检测过程中，点击停止，确实能停止，但是开始按钮还是灰色无法点击，也就是说开始检测任务后，点击停止，却不能再开始」→ **根因**：手动停止这条路径上没有任何「回到空闲」的状态转移。`app/controller.py:99-102` 的 `stop_source()` 只做 `current_source.stop()` + 置 None、**不发任何信号**；`infra/image_source.py` 的 `FolderSource.stop()` / `CameraSource.stop()` 也都不发 `finished`；而按钮状态唯一的复位入口是 `ui/main_window.py:130` 的 `source_finished → source_panel.set_running_false`，只有**自然跑完**（放完一遍 / 空文件夹 / 摄像头打不开）才会发。→ 修：控制器成为状态的唯一真源。`app/controller.py` 新增 `source_state = pyqtSignal(bool)`（只在状态**变化**时发）与 `source_error = pyqtSignal(str)`；`start_source` 在 `src.start()` **之前**置运行中（这样空文件夹在 `start()` 里同步发 `finished` 也能正确落回空闲）；`stop_source` 先 `src, current_source = current_source, None`、发「空闲」再 `src.stop()`（摄像头 stop 要等读帧线程退出，最多 2s，先发以免界面呆住）；`src.finished` 改为 `connect(lambda s=src: self._on_source_finished(s))`，处理器 `if src is not self.current_source: return` —— 丢弃旧摄像头线程迟到的 `finished`（否则会把**新一轮**的运行状态误关掉），否则清 `current_source` + 发 `source_finished` + 发「空闲」；`src.start()` 抛异常（路径不存在等）时退回空闲并 `source_error.emit(str(e))`。`ui/main_window.py` 改连 `source_state → source_panel.set_running`，新增 `_on_source_error` 往状态栏写「启动输入源失败：…」；`ui/widgets/source_panel.py` 删掉已无人调用的 `set_running_false()` |
+| m00232 | 用户：「帮我将这个项目打包，我需要给一个.exe文件」→ 按 **onedir + 模型随包** 做：`packaging/OcrSystem.spec`（collect_all paddle/paddlex/cv2、把 site-packages/nvidia/*/bin 摆到 `_internal\nvidia\<包>\bin` 以对上 `paddle/__init__.py:842-902` 的 DLL 搜索逻辑）+ `packaging/build.ps1`，装 PyInstaller 6.22.3。产物 `dist\OcrSystem\` 6557 文件 / 4,470 MB。**但打包版 `OcrSystem.exe --selftest` 卡住不返回**：窗口模式（console=False）没有控制台，早期错误弹 GUI 框挡住，dist 里连 logs\ 都没建出来 —— 这条没查完就被用户改口 |
+| — | 打包期间顺手加的「换机器自适配」**保留下来**：`config.yaml` 新增 `engine.device: "auto"`；`core/engine.py` 新增 `detect_device()`（`is_compiled_with_cuda()` + `device_count()>0`）与 `_create()` 的 GPU→CPU 自动回退，`EngineManager.device` 暴露当前实际设备；`app/controller.py:37` 从 config 传入 |
+| m00434 | 用户：「我现在不需要exe，我只需要一个图标能够点击之后直接运行我的项目，帮我移除所有和exe打包相关的内容」→ **打包方案整套拆除**：删 `packaging/`、`dist/`、`build/`、`_tmp/`、`_pyinstaller/`、`_uvcache/`、`_runlogs/`、`_selftest.yaml`、`_build_log.txt`（`_tmp` 里 tempfile 造的 700 权限目录要先 `icacls /grant` 才能删）；`uv pip uninstall` 掉 pyinstaller + altgraph/pefile/pywin32-ctypes/pyinstaller-hooks-contrib；`pyproject.toml` 删掉 `[project.optional-dependencies] packaging`；`main.py` 改写为**纯源码启动**（去掉 frozen/_internal/models 回退/selftest/OCR_CONFIG，保留 pythonw 下 `sys.stdout is None` 的保护、`install_crash_log()` → `logs/crash.log`） |
+| — | 【已实测】新增图标 `resources/icons/ocr.ico`（31 KB，7 种尺寸）；建 `OCR系统.lnk`（项目根）+ 桌面 `OCR 识别系统.lnk`，目标 `.venv\Scripts\pythonw.exe` + 参数 `"main.py"` + 起始位置 `E:\ocr_system` + 图标 `ocr.ico`。验证：`cmd /c start pythonw main.py`（等价于 Explorer 双击的分离启动）**存活 45 s、工作集 457 MB、crash.log 为空、results.csv 重写为表头** → 「快捷方式 → main.py → 加载模型 → 界面」链路通。坑：沙箱里用 `Start-Process pythonw` 起的无控制台子进程会被 ~5 s 内杀掉（`pythonw -c "sleep(20)"` 同样），**属沙箱行为、不是代码问题** |
+| — | 【已实测】新增常驻回归测试 **`test/test_source_state.py`**（离屏、假 pipeline 顶掉真推理、不加载模型，跑法 `.venv\Scripts\python.exe -u test\test_source_state.py`）6 组全过：①开始→运行中 ②**停止→空闲（原 bug 用例，修前在此断言失败，已复现）** ③再开始→再停止 ④自然跑完→空闲 ⑤空文件夹→空闲 ⑥路径不存在→空闲且状态栏出现「启动输入源失败」。4 个改动文件用内存 `compile()` 校验语法通过（沙箱环境见 §8.5 最后一条，`compileall` 写不进子目录 `.pyc`）|
+| m00573 | 用户：「和我讲一下实现原理」→ 通读 `main.py`、`app/controller.py`、`app/workers.py`、`infra/image_source.py`、`core/{pipeline,recognizer,preprocess,decision,engine}.py` 后按六层讲：①启动（pythonw 无 stdout → `os.devnull`；`chdir`；`PADDLE_PDX_CACHE_HOME` 必须在 import paddlex 前设；`faulthandler`+`excepthook` → `crash.log`）②三线程（主线程 / `InferenceWorker` / 输入源；一帧在飞 = `frame_processed` → `frame_done` ack 背压，队列不设 maxsize，`frame_processed` 发在 `finally`，坏图走 `read_failed` 也产出结果）③开始/停止状态机（`source_state` 唯一真源，见 m00002）④单帧算法（CLAHE → 反相二值 → 形态学 → 最大轮廓 `minEnclosingCircle` → 116×116 ROI → 多角度 warpAffine + 方向分类纠 180° → OCR 取票）⑤聚合投票（聚合分 = Σ(score − conf_threshold)；`20.png` 案例：三张弱票 2.0871 曾压过两张强票 1.9990，改边际分后 0.9990 > 0.5871；排序键 `(agg, max, votes)`，无早退）⑥判定与三路输出（白名单 → 1/NG，每帧无条件发一个字节）。讲解中**发现并修掉我自己写坏的字符**：`core/engine.py:52` 的「改用 CPU 重试」当时被写成了带 U+FFFD 替换字符的乱码，已改正；顺带删掉 `_icon_preview.png` |
+| — | 【已实测】对 9 个核心文件做 `ast.parse` 并断言文件内**不含 U+FFFD**，全部通过（`main.py`、`app/controller.py`、`app/workers.py`、`core/{engine,pipeline,recognizer,preprocess,decision}.py`、`infra/image_source.py`） |
+| m00599 | 用户：「更新记忆和设计文档，同时创建本地git仓库并上传」→ **git 侧做不了也提前说清**：`E:\ocr_system` 没有 `.git`，这台机器**根本没装 git**（PATH、`Program Files`、`Program Files (x86)`、`%LOCALAPPDATA%\Programs\Git`、scoop、chocolatey 全没有；只有 `winget`），也没有任何 remote 可「上传」。用户随即把任务收窄为只更新文档（m00607） |
+| m00607 | 用户：「更新记忆和设计文档」→ 设计文档升 **v1.9**：表头日期/状态/代码位置、v1.9 变更行、§5.1 目录树（`OCR系统.lnk`、新 main.py、`engine.py` 的设备自适应、controller 的 `source_state`、`logs/crash.log`、`resources/icons/ocr.ico`）、§11 D10 关闭、§14 下一步 +「双击确认真窗口」、§15（路径改 `E:\ocr_system`、paddlepaddle → **paddlepaddle-gpu 3.3.0**、PyQt6 版本细化、PyInstaller 不必装、「启动方式」小节）。本文件：表头时间与状态、§1 加「怎么启动」、§2 的 git 声明改为「**不是 git 仓库、本机没装 git**」、§4 行数与 `engine:` 段（并删掉早已不存在的 `send_on_change_only`）、§6 模块表全部行数重测 + 新增 `main.py`/四个面板/`image_view.py` 行、§9 加「双击未见真窗口」、§10 加第 11 条 |
+| m00804 | 用户（在听完我对设计文档 J5 的分析后）：「按 ①+②+④ 直接改」→ **引擎就绪门禁落地**（详见 §7.3 + 设计文档 D13）：`app/controller.py`（214→274）新增 `models_ready`/`engine_loading` 与 `_loading`/`_loaded`/`_load_worker`；`start_source` 在**未加载**、**加载中**两种情况都拒开跑并 `source_error` 说明（`:141-152`）；**运行中禁止加载**（`:100-103`）；`rec.set_models()` 从 `load_models()` 开头挪到 `_on_load_done` 成功分支（`:118-126`），杜绝失败后每帧 `No engine bindings registered`；`engine_status` 增第三参模型名、新增 `engine_busy`；`ui/widgets/model_panel.py`（73→102）加状态标签与 `_refresh_hint`（切换未加载显示「已加载 A（当前选 B 未加载）」）、加载中禁用两个下拉框；`ui/widgets/source_panel.py`（135→149）加 `set_engine_busy` + `_apply_buttons`（加载中禁用「开始」并给 tooltip）；`ui/main_window.py`（201→204）接 `engine_busy → set_engine_busy` |
+| — | 【已实测】新增 **`test/test_engine_ready.py`**（189 行，离屏、`paddlex.create_model` 桩掉、`FakePipeline`、不加载真模型）6 组全过 EXIT=0：①未加载点开始被拒且按钮不卡灰 ②加载中「开始」禁用+tooltip，控制器层直连 `start_source()` 也被拒（**Qt 里禁用按钮的 `click()` 不触发 clicked，绕不过 UI 层，所以必须直连验证第二道闸**）③`_on_load_done(False,…)` 后面板红字且 `rec_model_name == ""`（模型名未被污染）④成功后 `models_ready`、标签含模型名、可开跑 ⑤切到别的模型未加载→标签含「未加载」且不含「已加载：」⑥运行中 `load_models` 被拒（`_load_worker` 不变、消息含「运行」）且不影响正在跑的检测。`test/test_source_state.py` 加 `ctrl.mark_models_loaded(...)` 后 6 组仍全过；`import main` OK；仓库 33 个 `.py` 全部 `ast.parse` 通过 |
+| — | 文档同步（同一次）：设计文档升 **v2.0** —— 表头日期+v2.0 变更行、§10 J5 备注改写为「实际缺口更大：加载锁会堵输入源线程」、§11 **新增 D13**（含三处根因与修法/行号）、§13 新增**第 13 条验收**（模型门禁）、§14 状态表加一行；本文件：表头、§6 四个模块行数与状态、§7.3 新增、§11 常用命令加两套回归、本时间线 |
+| m01023 | 用户装好 git 后：「创建git本地仓库并提交」→ **仓库建立**：git 2.56.0 在 `D:\Git\cmd\git.exe`（机器级 PATH 已含，但运行中的 shell 需刷新 PATH 才看得见）；`git init` + 分支改 `main`；仓库级身份 `ocr_system <ocr_system@localhost>`（全局为空，没动）；`.gitignore` 挡住 `.venv/`（4.6 GB）、`models/`（477 MB）、`logs/*.log|*.csv`、`__pycache__`、`_*` 探针文件；`.gitattributes` 统一 `eol=lf` 并把图片/权重标成 binary。首个提交 **`72a89fa`**：45 文件 / 7,504 行（含 `ocr.ico`、`OCR系统.lnk`、`uv.lock`、`test_engine_ready.py`），工作区干净。**无远程**，所以只能本地提交 |

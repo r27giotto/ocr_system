@@ -10,7 +10,7 @@ class SerialPanel(QGroupBox):
     close_requested = pyqtSignal()
     refresh_requested = pyqtSignal()
 
-    def __init__(self, baud_options=(9600, 19200, 38400, 57600, 115200, 230400)):
+    def __init__(self, baud_options=(9600, 115200)):
         super().__init__("串口 (Arduino)")
 
         self.port_combo = QComboBox()

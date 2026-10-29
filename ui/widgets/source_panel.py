@@ -60,6 +60,9 @@ class SourcePanel(QGroupBox):
         self.btn_start = QPushButton("▶ 开始")
         self.btn_stop = QPushButton("■ 停止")
         self.btn_stop.setEnabled(False)
+        # 引擎在加载模型时「开始」也要按不下去（见 set_engine_busy）
+        self._running = False
+        self._engine_busy = False
         self.btn_start.clicked.connect(self._start)
         self.btn_stop.clicked.connect(self.stop_requested.emit)
 
@@ -131,8 +134,16 @@ class SourcePanel(QGroupBox):
         self.start_requested.emit(cfg)
 
     def set_running(self, running: bool):
-        self.btn_start.setEnabled(not running)
-        self.btn_stop.setEnabled(running)
+        self._running = running
+        self._apply_buttons()
 
-    def set_running_false(self):
-        self.set_running(False)
+    def set_engine_busy(self, busy: bool):
+        """模型加载中：「开始」也要禁用 —— 不然能开跑，推理线程会堵在加载锁上。"""
+        self._engine_busy = busy
+        self._apply_buttons()
+
+    def _apply_buttons(self):
+        self.btn_start.setEnabled(not self._running and not self._engine_busy)
+        self.btn_stop.setEnabled(self._running)
+        self.btn_start.setToolTip(
+            "模型正在加载，请稍候…" if self._engine_busy else "")

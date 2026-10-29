@@ -1,3 +1,5 @@
+import traceback
+
 from PyQt6.QtCore import QObject, pyqtSignal
 
 from core.engine import EngineManager
@@ -18,16 +20,26 @@ class AppController(QObject):
     frame_ready = pyqtSignal(object, str)
     result_ready = pyqtSignal(object)
     serial_sent = pyqtSignal(int, bool, str)
-    engine_status = pyqtSignal(bool, str)   # 终态：模型加载完成/失败
+    engine_status = pyqtSignal(bool, str, str)   # 终态：(是否成功, 消息, 模型名)
     engine_progress = pyqtSignal(str)       # 过程：正在加载哪个模型
+    # ★ 引擎忙（正在加载模型）。加载期间「开始」必须按不下去：
+    #   加载线程持着 EngineManager 的锁，而推理线程第一件事就是拿这把锁，
+    #   这时候开跑等于把检测线程堵在加载器后面。
+    engine_busy = pyqtSignal(bool)
     source_finished = pyqtSignal()
+    # ★ 输入源是否在跑。UI 的「开始/停止」按钮只认这一个信号，
+    #   因为「回到空闲」有 4 条路径（自然跑完 / 手动停止 / 空文件夹 /
+    #   源启动失败），以前只有第 1 条会通知界面，手动停止后按钮就一直灰着。
+    source_state = pyqtSignal(bool)          # True=运行中, False=空闲
+    source_error = pyqtSignal(str)           # 输入源启动失败（如路径不存在）
 
     def __init__(self, config: dict):
         super().__init__()
         self.config = config
 
         # ---- 核心层 ----
-        self.engine = EngineManager()
+        # 设备由 config.yaml 的 engine.device 决定：auto / cpu / gpu:0
+        self.engine = EngineManager(config.get("engine", {}).get("device", "auto"))
         pre_cfg = PreprocessConfig(**{
             k: tuple(v) if isinstance(v, list) else v
             for k, v in config.get("preprocess", {}).items()
@@ -58,20 +70,65 @@ class AppController(QObject):
 
         # ---- 状态 ----
         self.current_source = None
+        self._source_running = False
+        # ★ 引擎状态：只有**加载成功**才把模型名交给 Recognizer。
+        #   以前在 load_models() 开头就 set_models()，加载一失败，
+        #   rec_model_name 已经是新名字，之后每帧都抛
+        #   `No engine bindings registered for model '<名>'`。
+        self._loading = False
+        self._loaded = (None, None)      # (rec_name, ori_name)，仅加载成功时写
+        self._load_worker = None
         # ★ 对账计数器：进来的帧数 vs 出去的结果数。
         #   两者相等 = 每张图都处理到了；不等就说明有帧卡在队列里。
         self.frames_in = 0
         self.results_out = 0
 
     # ---------- 模型 ----------
+    @property
+    def models_ready(self) -> bool:
+        """模型是否已加载好（可以直接开跑）。"""
+        return self._loaded[0] is not None
+
+    @property
+    def engine_loading(self) -> bool:
+        return self._loading
+
     def load_models(self, rec_name: str, ori_name: str):
-        self.rec.set_models(rec_name, ori_name)
+        """异步加载。**运行中不允许加载** —— 加载线程会持 `EngineManager` 的
+        锁几秒，而推理线程每帧都要拿这把锁，开了就是卡住检测线。
+        """
+        if self._source_running:
+            self.engine_status.emit(
+                False, "检测正在运行，请先点「停止」再加载模型", rec_name)
+            return
+        if self._loading:
+            self.engine_status.emit(False, "模型正在加载中，请稍候", rec_name)
+            return
+
+        self._loading = True
+        self.engine_busy.emit(True)
         self._load_worker = EngineLoadWorker(self.engine, rec_name, ori_name)
         # 进度和终态必须走两条信号：engine_status 带 ok 布尔，
         # 之前把进度也塞进它（ok=False），界面就把「正在加载 X」当成「加载失败」。
         self._load_worker.progress.connect(self.engine_progress.emit)
-        self._load_worker.done.connect(self.engine_status.emit)
+        self._load_worker.done.connect(
+            lambda ok, msg: self._on_load_done(ok, msg, rec_name, ori_name))
         self._load_worker.start()
+
+    def _on_load_done(self, ok: bool, msg: str, rec_name: str, ori_name: str):
+        self._loading = False
+        if ok:
+            # ★ 只有这一刻才让 Recognizer 认新模型名
+            self.rec.set_models(rec_name, ori_name)
+            self._loaded = (rec_name, ori_name)
+        self.engine_busy.emit(False)
+        self.engine_status.emit(ok, msg, rec_name)
+
+    def mark_models_loaded(self, rec_name: str, ori_name: str = ""):
+        """假定模型已经就绪（**给测试/自检用**，正常运行流程不调用它）。"""
+        self._loading = False
+        self.rec.set_models(rec_name, ori_name)
+        self._loaded = (rec_name, ori_name)
 
     def set_angles(self, angles):
         if angles:
@@ -82,6 +139,18 @@ class AppController(QObject):
 
     # ---------- 输入源 ----------
     def start_source(self, cfg: dict):
+        # ★ 引擎没就绪就别开跑：这时推理线程拿不到模型，
+        #   只会对每一帧报 `No engine bindings registered for model '…'`。
+        #   界面在按钮点下时已先置「运行中」，所以这里必须无条件回一次「空闲」。
+        if self._loading:
+            self.source_state.emit(False)
+            self.source_error.emit("模型正在加载，请等加载完成再开始")
+            return
+        if not self.models_ready:
+            self.source_state.emit(False)
+            self.source_error.emit("模型未加载，请先点「加载模型」")
+            return
+
         self.stop_source()
         t = cfg["type"]
         if t == "camera":
@@ -92,14 +161,45 @@ class AppController(QObject):
             src = FolderSource(path, cfg["interval_ms"], loop)
         src.frame_ready.connect(self._on_frame)
         src.read_failed.connect(self._on_read_failed)
-        src.finished.connect(self.source_finished.emit)
+        # 把 src 绑给处理器：旧摄像头线程 stop() 之后可能还补发一次 finished，
+        # 那一次绝不能把**新一轮**的运行状态关掉（_on_source_finished 会丢弃）。
+        src.finished.connect(lambda s=src: self._on_source_finished(s))
         self.current_source = src
-        src.start()
+        # 先置「运行中」再 start()：空文件夹会在 start() 里同步发 finished，
+        # 先置位才能让那一次 finished 把状态正确落回空闲。
+        self._set_source_state(True)
+        try:
+            src.start()
+        except Exception as e:
+            # 路径不存在 / 摄像头参数非法等：必须退回空闲，否则「开始」永远灰着
+            traceback.print_exc()
+            self.current_source = None
+            self._set_source_state(False)
+            self.source_error.emit(str(e))
 
     def stop_source(self):
-        if self.current_source:
-            self.current_source.stop()
-            self.current_source = None
+        src, self.current_source = self.current_source, None
+        if src is None:
+            return
+        # 先落回空闲再 stop()：摄像头 stop 要等读帧线程退出（最多 2s），
+        # 这段时间界面不该还显示「运行中」。
+        self._set_source_state(False)
+        src.stop()
+
+    def _set_source_state(self, running: bool):
+        """状态只在**变化**时才发信号，避免开始→停止连着来时界面闪一下。"""
+        if running == self._source_running:
+            return
+        self._source_running = running
+        self.source_state.emit(running)
+
+    def _on_source_finished(self, src):
+        """输入源自己跑完了：放完一遍 / 空文件夹 / 摄像头打不开。"""
+        if src is not self.current_source:
+            return                  # 已被替换或已手动停止的旧源，忽略
+        self.current_source = None
+        self.source_finished.emit()
+        self._set_source_state(False)
 
     # ---------- 帧 → 推理 ----------
     def _on_frame(self, frame, name):

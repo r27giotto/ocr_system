@@ -124,10 +124,16 @@ class MainWindow(QMainWindow):
         # 控制器 → UI
         self.controller.engine_status.connect(self.model_panel.set_loaded)
         self.controller.engine_progress.connect(self.model_panel.set_progress)
+        # 加载中禁用「开始」：加载线程持着 EngineManager 的锁，
+        # 这时开跑会把推理线程堵在加载器后面。
+        self.controller.engine_busy.connect(self.source_panel.set_engine_busy)
         self.controller.frame_ready.connect(self.image_view.set_frame)
         self.controller.result_ready.connect(self._on_result)
         self.controller.serial_sent.connect(self._on_serial_sent)
-        self.controller.source_finished.connect(self.source_panel.set_running_false)
+        # 按钮状态只跟 controller.source_state 走：自然跑完、手动停止、
+        # 空文件夹、启动失败四条路径都会把它置回 False。
+        self.controller.source_state.connect(self.source_panel.set_running)
+        self.controller.source_error.connect(self._on_source_error)
 
         # 历史项点击 → 主图区回看
         self.history_panel.item_clicked.connect(self._on_history_clicked)
@@ -154,6 +160,11 @@ class MainWindow(QMainWindow):
     def _on_refresh_ports(self):
         ports = self.controller.refresh_ports()
         self.serial_panel.set_ports(ports)
+
+    def _on_source_error(self, msg: str):
+        """输入源起不来（路径不存在 / 摄像头打不开）。按钮已由
+        controller.source_state 复位，这里只负责把原因说给用户看。"""
+        self.status_bar.showMessage(f"启动输入源失败：{msg}", 10000)
 
     def _on_open_serial(self, port: str, baud: int):
         ok, msg = self.controller.open_serial(port, baud)

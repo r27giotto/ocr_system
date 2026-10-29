@@ -2,11 +2,11 @@
 
 | 项 | 值 |
 |---|---|
-| 日期 | 2026-10-15（初稿）／ **2026-10-16 修订（v1.2）** ／ **2026-10-16 再修订（v1.3）** ／ **2026-10-19 修订（v1.4）** ／ **2026-10-19 再修订（v1.5）** ／ **2026-10-19 再修订（v1.6、v1.7、v1.8）** |
+| 日期 | 2026-10-15（初稿）／ **2026-10-16 修订（v1.2）** ／ **2026-10-16 再修订（v1.3）** ／ **2026-10-19 修订（v1.4）** ／ **2026-10-19 再修订（v1.5）** ／ **2026-10-19 再修订（v1.6、v1.7、v1.8）** ／ **2026-10-25 修订（v1.9）** ／ **2026-10-25 再修订（v2.0）** |
 | 主题 | ocr_system：圆形标记数字识别 → 判定 `G`/`NG` → 串口裸字节驱动 Arduino 喷气阀吹掉不良品 |
-| 状态 | 设计**已定稿，§12 的 6 个待裁定问题全部关闭**（m03646）；**「图像 → OCR → G/NG → 串口 → 板子输出」主链已全段实测**（m03833：跑图后 NG 帧 Arduino 板载 LED 亮）。唯一没验的是**气动阀实际吹气**（未接阀/气源），见 §14 |
+| 状态 | 设计**已定稿，§12 的 6 个待裁定问题全部关闭**（m03646）；**「图像 → OCR → G/NG → 串口 → 板子输出」主链已全段实测**（m03833：跑图后 NG 帧 Arduino 板载 LED 亮）。唯一没验的是**气动阀实际吹气**（未接阀/气源），见 §14。**分发形态已定：不做 exe，双击快捷方式启动**（m00434，见 §14） |
 | 文档用途 | 交给一个没参与过讨论的构建者，让他能据此排计划并动手，不必回头问人 |
-| 代码位置 | `E:\Python Project\ocr_system` |
+| 代码位置 | `E:\ocr_system` |
 | 本次修订 | §6.1/§6.2 算法补注、**§6.4.1 新增 `G`/`NG`/`?` 显示规则**、§7 配置、§8 界面（含**新增** §8.1 角度面板规则 / §8.2 历史面板规则）、§9 串口、§10 决策记录（补 J7–J10）、§11 已知缺陷（两个阻塞项**均已解决**）、§12 待裁定问题（Q4 已改写）、§13 验收标准（+2 条）、§14 实现状态；**新增 §15 环境与依赖（已实测）** |
 | v1.3 变更 | §8.1 角度面板：旋转网格由 `10°~170°` 每 10° 共 17 格改为 **`5°~175°` 且步长可由下拉框选 `5/10/15/20/30`（默认 5°，共 35 格）**；§8 面板表、§10 决策记录、§13 验收标准同步 |
 | v1.4 变更 | **§9 串口格式已拍板**：用户提交了 Arduino 固件 `arduino/sketch_oct19a/sketch_oct19a.ino`，接收端认的就是裸 `'1'`/`'0'`；`'1'` → 开**喷气阀** 100 ms 吹掉，`'0'` → 立即关（放行）。反推出 `TARGET_NUMBERS` 是**不良品编号**（NG）已确证；缺陷 D1 性质随之变化（失败发 `'0'` ＝ 放行）。§5.1 目录树补 `arduino/`，§12 Q3 关闭一半、表头 6→5 |
@@ -14,6 +14,8 @@
 | v1.6 变更 | **★ 设计问答全部关闭（m03646）**：Q1「识别失败时串口发0」（= 现实现，D1 关闭为「明示接受」）、Q2「每一帧只会出现一颗」（单结果结构成立）、Q4「最好是离线」（偏好非硬约束，config 里 `PP-OCRv5_server_rec` 标注需联网）、Q6「COM口接的是 Arduino Uno R3」→ **§9 新增「接收端板子：Arduino Uno R3」一段，含 DTR 自动复位丢字节的警示**；§10 用户定的表 +4 行；§12 表头改为「已全部裁定」；§14 下一步重写为真机联调三项确认。**至此 §12 无待决项** |
 | v1.7 变更 | **固件已烧录并验证通过（m03767）**：§9 板子表加「烧录状态 ✅」；**新增「`'0'` 会掐断上一颗脉冲」一节** —— 固件的 `'0'` 是主动关阀并清 `pulsing`，帧间隔 < `PULSE_MS=100` 时后继的 G 会截短前一颗 NG 的吹气（当前 220ms/帧不触发，属隐式时间耦合，解耦需改固件语义）；§12 Q6、§14 状态表与下一步同步 |
 | v1.8 变更 | **本程序已驱动真板子成功（m03833）**：用户「我运行run_app.py跑图之后，对于NG信号arduino会亮灯」→ §9 板子表新增「Python 侧已驱动成功 ✅」行、DTR 行改为「实测不影响整体流程，但第一颗是否被吞未单独数过」；§12 Q6 补此结论；§14 状态表与下一步改为「接气源 + 喷气嘴验证真正吹掉料」。**「图像 → OCR → G/NG → 串口 → 板子输出」主链至此全段实测**；唯一没验的是气动阀实际吹气 |
+| v1.9 变更 | **分发形态改为「双击快捷方式」**（m00232 先做 exe → m00434 用户改口「不需要 exe，只要一个图标点击就能运行」，打包方案整套拆除）：新增 `resources/icons/ocr.ico`、根目录 `OCR系统.lnk` 与桌面快捷方式（→ `.venv\Scripts\pythonw.exe "main.py"`）；`main.py` 补 `pythonw` 下 `sys.stdout/stderr is None` 的保护与 `logs/crash.log`；**换机器自适配保留**（`config.yaml` 新增 `engine.device: auto`，`core/engine.py` 加设备探测与 GPU→CPU 回退）。§5.1 目录树、§11 D10、§14 状态表与下一步、§15 环境与依赖同步 |
+| v2.0 变更 | **模型加载与开跑的时序漏洞修掉（m00804，用户对 J5 拍板「按 ①+②+④ 直接改」）**：控制器成为「引擎是否就绪」的唯一真源（`models_ready` / `_loading`）；`start_source` 在**未加载**和**加载中**两种情况下都拒绝开跑并给出说明；**检测运行中禁止加载模型**（避免输入源线程被 `EngineManager` 的锁堵住）；`rec.set_models()` 从 `load_models()` 开头移到**加载成功之后**，杜绝失败后每帧 `No engine bindings registered for model '<名>'`；`engine_status` 带上模型名，切换下拉框未加载时面板显示「已加载 A（当前选 B 未加载）」。§10 J5 备注、§11 **新增 D13**、§13 新增第 13 条验收；回归测试 `test/test_engine_ready.py` |
 
 **阅读约定**：本文严格区分三类内容 ——
 - **【用户定的】**：用户本人明确说过的，不可擅自推翻
@@ -95,7 +97,7 @@
 | 模型运行库 | PaddleX（`paddlex.create_model`），**不用 paddleocr** |
 | 包管理 | **uv**。该 venv **没有 pip**（`No module named pip`），`python -m pip` 用不了 |
 | 依赖声明位置 | **`pyproject.toml`**。`requirements.txt` 是**空文件**，不要信它 |
-| 版本控制 | **没有** —— 项目不是 git 仓库。改动无法回滚，需谨慎 |
+| 版本控制 | **git 本地仓库**（2026-10-25 建立，分支 `main`，无远程）：git 在 `D:\Git\cmd\git.exe`。`.venv/`（4.6 GB）与 `models/`（477 MB）**不入库**，理由见 `.gitignore` 注释；首个提交 `72a89fa`（45 文件） |
 | 离线可用 | 模型必须已在本地缓存。**`PP-OCRv5_server_rec` 本地没有**，选中它需要联网下载 |
 
 ---
@@ -120,14 +122,17 @@
 ### 5.1 分层
 
 ```
-main.py                 入口：设环境变量 → 读 config → 起 QApplication → 组装 → 跑
+OCR系统.lnk              ★ 双击启动（→ .venv\Scripts\pythonw.exe "main.py"，无黑框）
+main.py                 入口：兜住 pythonw 的 stdout=None → chdir → 设环境变量 → 读 config
+                        → 装崩溃日志 → 起 QApplication → 组装 → 跑
 config.yaml             唯一配置文件
 
 core/                   ★ 纯 Python 逻辑层，零 Qt 依赖
   models.py             RecognitionResult 数据类（帧结果的唯一载体）
   preprocess.py         CLAHE 增强 / 定位圆形 ROI / 多角度旋转 / 生成变体
   parsers.py            解析 PaddleX 的返回（格式多变，需兼容）
-  engine.py             EngineManager：按模型名缓存模型实例，带线程锁
+  engine.py             EngineManager：按模型名缓存模型实例，带线程锁；
+                        detect_device() 自动选 gpu/cpu，GPU 初始化失败回退 CPU
   recognizer.py         多角度识别主循环（角度遍历 + 方向分类 + 按数字聚合分选结果）
   decision.py           DecisionMaker：数字 → 1/0
   pipeline.py           OcrPipeline：单帧端到端串联
@@ -138,7 +143,8 @@ infra/                  基础设施（允许用 Qt；见 §11 D2）
   csv_logger.py         CSV 留档
 
 app/                    编排层
-  controller.py         AppController：持有 core 对象、串口、CSV、线程；发 Qt 信号给 UI
+  controller.py         AppController：持有 core 对象、串口、CSV、线程；发 Qt 信号给 UI；
+                        输入源状态（source_state）的唯一真源
   workers.py            EngineLoadWorker / InferenceWorker（QThread）
 
 ui/                     界面层
@@ -146,8 +152,8 @@ ui/                     界面层
   overlay.py            在主图上画框 + 叠加结果
   widgets/              七个面板部件（见 §8）
 
-logs/                   app.log / results.csv
-resources/icons/        当前为空
+logs/                   app.log / results.csv / crash.log（pythonw 下的异常堆栈）
+resources/icons/        ocr.ico —— 程序图标（7 种尺寸）
 test/                   test_ocr2.py / test_rename.py ← 行为权威依据，不要改
 
 arduino/                接收端固件（Arduino，独立于 Python 工程）
@@ -391,6 +397,7 @@ FolderSource / CameraSource  ──frame_ready(img, name)──▶  InferenceWor
 app:        log_dir: "./logs"   csv_output: "./logs/results.csv"   save_csv: true
 target:     numbers: [...]      valid_min: 1   valid_max: 48
 models:     rec_options: [...]  ori_options: [...]  default_rec: ...  default_ori: ...
+engine:     device: "auto"        （auto / gpu:0 / cpu；GPU 初始化失败自动回退 CPU，m00232 加）
 recognizer: conf_threshold: 0.5   debug_aggregate: true   drop_zero: true
             angles: [...]   drop_zero: true
 preprocess: roi_size: 116   scale: 1.0   clahe_clip: 2.0   clahe_grid: [8,8]
@@ -507,7 +514,7 @@ value == 1  →  发送单字节 b"1"
 ### ✅ 格式已由 Arduino 端固件确认（m03236）—— 不再是未决项
 
 这里原先写着「全项目唯一没人拍板的决定」。现在**已经拍板了**：用户在
-`E:\Python Project\ocr_system\arduino\sketch_oct19a\sketch_oct19a.ino`（43 行）里
+`E:\ocr_system\arduino\sketch_oct19a\sketch_oct19a.ino`（42 行）里
 把接收端写了出来，它认的就是**裸字符 `'1'` / `'0'`**。
 
 | 收到 | 固件动作 |
@@ -621,7 +628,7 @@ Controller._on_result:
 | J2 | ~~推理队列 `maxsize=1`，满了**丢最旧帧**~~ | ~~筛选机要实时，宁可丢帧不可积压~~ | ❌ **已被用户推翻（m03412）**：「确保每一张图片都要识别到，对于每一张图片都需要发出对应的处理信号」→ 改为**不丢帧 + 一帧在飞背压**，见 §6.6。这条现在**不再是设计**，留着只为说明曾经的取舍 |
 | J3 | 识别失败（未找到圆/没识别出）**也发 0** | 简化下游逻辑 | ✅ **已由用户裁定（m03646，Q1）**：「识别失败时串口发0」→ 现实现即正确，**不再是待决项**。风险明确记录：读不出来的缺陷件会流到下游（反目标 A2），用户已明示接受 |
 | J4 | 历史缩略图存**整帧**而非缩略图 | 实现简单 | 200 帧常驻内存，见 D6 |
-| J5 | 模型加载放在独立线程 | 加载要数秒，不能卡 UI | 加载中用户可能误点开始 |
+| J5 | 模型加载放在独立线程 | 加载要数秒，不能卡 UI | 加载中用户可能误点开始 → **实际缺口更大**：加载线程持着 `EngineManager` 的锁，而 `recognize()` 第一步就要拿同一把锁，加载中点「开始」会把**输入源线程**堵住；另外原实现没有任何「已加载」状态、加载失败后模型名还会被污染（详见 D13）。**已按 m00804 修**：控制器持有就绪状态，加载中/未加载都拒开跑，运行中拒绝加载 |
 | J6 | `rec_options` 是候选清单，`default_rec` 是初值 | 下拉框语义 | 无 |
 | J7 | 用 `PADDLE_PDX_CACHE_HOME` 把模型根目录**指到项目内的 `models/`**，而不是改 `EngineManager` 去传 `model_dir=` | 只改两行、`EngineManager` 完全不用动，且保留 PaddleX「缺模型自动下载」的能力；`model_dir=` 那条路要为每个模型改代码且丢掉自动下载 | **副作用：设了这个变量后 `~/.paddlex` 不再被读取**；`models/`（477MB）已在 `.gitignore` 里 |
 | J8 | 模型加载的**进度**和**终态**拆成两个信号（`engine_progress(str)` / `engine_status(bool,str)`） | 原先两者共用一个带 bool 的信号，进度被当成 `ok=False` → 界面先闪「加载失败」 | 无（已修，见 §11.3） |
@@ -651,10 +658,14 @@ Controller._on_result:
 | **D7** | `infra/csv_logger.py:16` | `open(self.path, "w", ...)` —— **每次启动清空 `logs/results.csv`**，历史留档丢失。 | 中 |
 | **D8** | `main.py:32` + `ui/main_window.py:150` | **两处**都会调 `controller.shutdown()` → 关闭时执行两次。 | 低 |
 | **D9** | `core/pipeline.py:45` | 调 `decider.decide(num)` 未传 `status`，而 `decision.py:23` 有这个参数（默认 `"ok"`）→ 参数形同虚设。 | 低 |
-| **D10** | `resources/icons/` | 空目录，无图标资源。 | 低 |
+| ~~D10~~ | `resources/icons/` + 根目录 | ~~空目录，无图标资源。~~ | ✅ **已解决（m00434）**：`resources/icons/ocr.ico` + 根目录 `OCR系统.lnk` / 桌面快捷方式，双击即启动（见 §14）。 |
+| ~~D13~~ | `app/controller.py:88-160` + `core/recognizer.py:105` | ① **没有任何「模型已加载」状态**：`start_source` 不看模型就开跑，而加载线程持着 `EngineManager` 的锁（`core/engine.py` 的 `threading.Lock`），`recognize()` 第一步 `rec = self.engine.get_rec(self.rec_model_name)` 要拿同一把锁 → **加载中开跑会把输入源线程堵住**；② 原 `load_models()` 一开头就 `rec.set_models(新名字)`，**加载失败后每一帧**都抛 `No engine bindings registered for model '<名>'`；③ `engine_status` 只带 `(ok, msg)` 不带模型名，切了下拉框没点加载，界面仍显示绿色「已加载」。 | ✅ **已修（m00804，即 J5 的落地方案）**：控制器是「引擎是否就绪」的唯一真源（`models_ready` / `_loading`，`:88`/`:93`）；`start_source` 两道闸 —— 加载中、未加载都拒开跑并用 `source_error` 说明（`:141-152`）；**运行中禁止加载**（`:100-103`，避免推理线程被锁堵住）；`rec.set_models()` 移到**加载成功之后**（`_on_load_done`，`:118-126`）；`engine_status` 增加模型名参数、面板如实显示「已加载 A（当前选 B 未加载）」。回归测试 `test/test_engine_ready.py`（6 组，见 §13 第 13 条） |
 
 > **v1.2 状态**：D2 已裁定「接受」（不重构）。D1、D3–D10 **都还没修** ——
 > 它们不影响启动与模型加载，属于待用户排序的工作。
+>
+> **v2.0 补记**：D10 已解决（m00434，图标/快捷方式）；**D13 新增并已修**（m00804，模型就绪门禁）。
+> 仍开着的只有 D4–D9。
 
 ### 11.1 ✅ 阻塞项 1：曾被判为「模型目录被 Windows 文件权限挡住」—— **已推翻，根本不是权限问题**
 
@@ -746,8 +757,8 @@ AppController.load_models('PP-OCRv6_small_rec', 'PP-LCNet_x1_0_textline_ori')
 4. **`parsers.py` 的健壮性**：PaddleX 返回格式可能随版本变化，当前的兼容写法覆盖了 `dict` / `list` / 对象属性三种，是否需要更强校验由构建者定。
 5. **日志**：`logs/app.log` 当前是空的，`app.log_dir` 配了但基本没用起来。日志策略由构建者定。
 6. **错误处理粒度**：当前 `pipeline` 用一个大 `try/except` 兜住所有异常并记 `status="error"`。是否需要细分由构建者定。
-7. **图标资源**：`resources/icons/` 是空的。
-8. **打包分发**：未讨论。是否要做成 exe 由构建者/用户定。
+7. **图标资源**：✅ 已补 `resources/icons/ocr.ico`（深蓝底 + 白色「OCR」+ 薄荷绿扫描线，多尺寸 16→256）。
+8. **打包分发**：❌ **已放弃**（用户 m00434 改口：不要 exe，只要「点一下图标就运行」）。现做法：根目录 `OCR系统.lnk` + 桌面快捷方式，指向 `.venv\Scripts\pythonw.exe "main.py"`，工作目录 `E:\ocr_system`，图标用上面的 `ocr.ico`。
 
 ### ✅ 原本待用户裁定的 6 个问题 —— **已全部裁定（m03646），设计正式定稿**
 
@@ -796,6 +807,13 @@ AppController.load_models('PP-OCRv6_small_rec', 'PP-LCNet_x1_0_textline_ori')
     串口字节数 `== N`、CSV 新增行 `== N`，结束后队列残留 `== 0`、最大积压 `<= 1`；
     坏图必须有 `status="read_failed"` 的结果并同样发 `'0'`；串口字节序列与 CSV 的
     `output_value` 逐条一致
+12. **能双击起来**：双击桌面「OCR 识别系统」后，**不出现黑色控制台窗口**，主窗口出现在屏幕上、
+    模型可加载、能开始/停止；若窗口没出来，`logs/crash.log` 里必须有堆栈（m00434）
+13. **模型门禁（D13 / J5）**：没点过「加载模型」、或加载还在进行时，点「开始」**不得开跑**，
+    并给出「模型未加载 / 模型正在加载」的说明（按钮不因此卡灰）；加载中「开始」按钮禁用、
+    两个模型下拉框禁用；**加载失败后不得污染模型名**（不能出现每帧 `No engine bindings registered`）；
+    加载成功后界面应写出**具体模型名**；切了下拉框但没点加载，界面必须显示「未加载」而不是绿色「已加载」；
+    检测运行中点「加载模型」必须被拒并提示先停止（m00804，回归 `test/test_engine_ready.py`）
 
 ---
 
@@ -815,7 +833,8 @@ AppController.load_models('PP-OCRv6_small_rec', 'PP-LCNet_x1_0_textline_ori')
 | **不丢帧 / 每帧必发信号（§6.6）** | ✅ **已达成并验收** —— `test3` 12 张（`interval_ms=0` 最快节奏）：`frames_in=12 / results_out=12 / 串口字节=12 / CSV 行=12 / 队列残留=0 / 最大积压=0`，字节序列与 CSV 的 `output_value` 逐条一致；坏图场景 2 张进 2 张出 |
 | **Arduino 接收端固件**（`arduino/sketch_oct19a/`） | ✅ **代码存在、已烧录验证**（m03767）、✅ **已由本程序驱动成功**（m03833：跑图后 NG 帧板载 LED 亮）。❌ **气动阀实际吹气未验证**（未接阀/气源） |
 | **设计问答** | ✅ **全部关闭**（Q1–Q6 均已有用户裁定，见 §12） |
-| 打包 / 图标 | ❌ 未做 |
+| 图标 / 启动快捷方式 | ✅ **已完成**：`resources/icons/ocr.ico`；根目录 `OCR系统.lnk` + 桌面 `OCR 识别系统.lnk`，均指向 `.venv\Scripts\pythonw.exe "main.py"`（无控制台窗口）。已用等价启动路径实测：进程存活 45 s、`logs/crash.log` 为空、界面/模型加载正常。**打包 exe 方案已放弃**（用户 m00434） |
+| **模型就绪门禁（D13 / J5）** | ✅ **已完成并回归**（m00804）：未加载 / 加载中不许开跑，运行中不许加载，加载失败不污染模型名，切换下拉框如实提示；`test/test_engine_ready.py` 6 组离屏全过 |
 
 **下一步的优先事项**：
 1. **接气源 + 喷气嘴，确认真能吹掉料** ← 最后一段没验的。顺带确认：
@@ -825,18 +844,24 @@ AppController.load_models('PP-OCRv6_small_rec', 'PP-LCNet_x1_0_textline_ori')
    (c) DTR 复位是否吞掉「第一颗」：数「界面已处理 N」与「板子亮灯次数」是否相等。
 2. GUI 全流程点一遍（除「加载模型」「开始/停止」外的按钮都没点过）。
 3. 若要让 `PP-OCRv5_server_rec` 可离线使用，需先把模型下载进 `models/official_models/`（当前缺该目录）。
+4. **双击桌面「OCR 识别系统」确认窗口真能起来** —— 沙箱里只验到等价启动路径
+   （`cmd /c start pythonw main.py` 存活 45 s、`crash.log` 为空、模型加载 + 界面构造正常），
+   没看见真窗口画在屏幕上（离屏跑）。
 
 ---
 
 ## 15. 环境与依赖（已实测）
 
-**解释器（必须用这个）**：`E:\Python Project\ocr_system\.venv\Scripts\python.exe`
+**解释器（必须用这个）**：`E:\ocr_system\.venv\Scripts\python.exe`
 （Python 3.12.10，uv 管理，base `E:\Python312`）。系统默认的 `E:\Python313\python.exe` **不带**这些依赖。
 
-**已装版本**：paddlepaddle 3.3.1、**paddlex 3.7.2**、numpy **2.3.5**（不是 2.5.4，原因见 §11 阻塞项 2 的版本约束）、
-opencv-contrib-python 5.0.0.93、PyQt6 6.11.0、pyserial 3.5、PyYAML 6.0.2、pandas 3.0.6、Pillow 12.3.0、
-pypdfium2 5.14.0、python-bidi 0.6.11。
+**已装版本**：**paddlepaddle-gpu 3.3.0**（`is_compiled_with_cuda()=True`，本机 1 张卡、Compute Capability 6.1；
+CUDA 运行库由 8 个 `nvidia-*` cu11 wheel 提供，**不在 `paddle/libs` 里**）、**paddlex 3.7.2**、
+numpy **2.3.5**（不是 2.5.4，原因见 §11 阻塞项 2 的版本约束）、
+opencv-contrib-python 5.0.0.93、PyQt6 6.11.0（qt6 6.11.2 / sip 13.13.0）、pyserial 3.5、PyYAML 6.0.2、
+pandas 3.0.6、Pillow 12.3.0、pypdfium2 5.14.0、python-bidi 0.6.11。
 **paddleocr 没装**（不需要，我们直接调 paddlex）。**venv 里没有 pip**（uv 建的），装包一律用 `uv pip install`。
+**PyInstaller 未安装也不需要使用**（打包方案已废弃，见 §14）。
 
 **`pyproject.toml` 的依赖（每行带原因，改动前先读注释）**：
 
@@ -851,7 +876,7 @@ pypdfium2 5.14.0、python-bidi 0.6.11。
 "pyserial>=3.5",
 ```
 
-**模型已全部本地化到项目内**：`E:\Python Project\ocr_system\models\official_models\`（15 个目录，477.1 MB）。
+**模型已全部本地化到项目内**：`E:\ocr_system\models\official_models\`（15 个目录，477.1 MB）。
 
 机制：`paddlex\utils\cache.py:28-29` 的
 `CACHE_DIR = os.environ.get("PADDLE_PDX_CACHE_HOME", DEFAULT_CACHE_DIR)` —— **在 import 时求值**，
@@ -869,6 +894,11 @@ pypdfium2 5.14.0、python-bidi 0.6.11。
   `.venv` 在受限模式下只读，所以任何 `uv pip install` 都需要一次 `danger-full-access`。
 - uv 默认缓存 `C:\Users\14734\AppData\Local\uv\cache` 在沙箱外 → 需设 `UV_CACHE_DIR` 指向工作区内。
 
-**一键启动 / 自检**：`E:\Python Project\ocr_system\test\run_app.py`
+**启动方式**：**双击根目录 `OCR系统.lnk`（或桌面上的「OCR 识别系统」）** —— 目标
+`.venv\Scripts\pythonw.exe`、参数 `"E:\ocr_system\main.py"`、起始位置 `E:\ocr_system`、图标 `resources\icons\ocr.ico`。
+`pythonw` 没有控制台，所以 `main.py` 做了三件事：把 `sys.stdout/stderr`（此时为 `None`）接到 `os.devnull`、
+`chdir` 到自身目录、把未捕获异常与原生崩溃写进 `logs\crash.log`。
+
+**调试用自检**：`E:\ocr_system\test\run_app.py`
 （自动切到 venv 解释器、切到项目根、注入 `sys.path`、设 `PADDLE_PDX_CACHE_HOME`）。
 `--check` 只做启动前自检；离屏运行用 `QT_QPA_PLATFORM=offscreen`。

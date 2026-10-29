@@ -1,3 +1,4 @@
+# test_ocr2.py
 import os
 import csv
 import time
@@ -6,10 +7,12 @@ import cv2
 import numpy as np
 from paddlex import create_model
 
+# ============ 环境变量 ============
 os.environ["OMP_NUM_THREADS"] = "8"
 os.environ["MKL_NUM_THREADS"] = "8"
-cv2.setNumThreads(1)
+cv2.setNumThreads(2)
 
+# ============ 全局单例 ============
 _rec_engine = None
 _ori_engine = None
 _clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
@@ -19,7 +22,7 @@ def get_rec_engine():
     global _rec_engine
     if _rec_engine is None:
         print("正在加载纯识别模型（仅首次）...")
-        _rec_engine = create_model("PP-OCRv6_small_rec")
+        _rec_engine = create_model("PP-OCRv6_small_rec", device="gpu:0")
         print("识别模型加载完成")
     return _rec_engine
 
@@ -28,30 +31,40 @@ def get_ori_engine():
     global _ori_engine
     if _ori_engine is None:
         print("正在加载文本行方向分类模型（仅首次）...")
-        _ori_engine = create_model("PP-LCNet_x1_0_textline_ori")
+        _ori_engine = create_model("PP-LCNet_x1_0_textline_ori", device="gpu:0")
         print("方向分类模型加载完成")
     return _ori_engine
 
 
-INPUT_PATH = r"E:\Python Project\project_0\data\test3"
-OUTPUT_CSV = r"E:\Python Project\project_0\data\test3\results.csv"
+# ============ 配置 ============
+INPUT_PATH = r"E:\ocr_system_img\test3"
+OUTPUT_CSV = r"E:\ocr_system_img\test3\results.csv"
 VIS_DIR = None
+# VIS_DIR    = r"E:\Python Project\project_0\data\test3\vis"
 
 TARGET_NUMBERS = {'12', '19', '20', '25', '37', '41', '43'}
-CONF_THRESHOLD = 0.6
+
+CONF_THRESHOLD = 0.5     # ★ 0.6 → 0.5：聚合分里弱票贡献极小，放宽准入门槛
 ROI_SIZE = 116
 SCALE = 1.0
 
+# ★ 加入 ±90°
+# ANGLES = (180, -90, -80, -70, -60, -50, -40, -30, -20, -10, 0,
+#           10, 20, 30, 40, 50, 60, 70, 80, 90)
 ANGLES = (-90, -60, -45, -30, 0, 30, 45, 60, 90, 180)
-
 ORDERED_ANGLES = sorted(ANGLES, key=lambda a: abs(a))
 
 IMG_EXTS = (".png", ".jpg", ".jpeg", ".bmp", ".tif", ".tiff", ".webp")
-EARLY_EXIT_CONF = 0.98
+
+# ★ 调试开关：打开后打印每个数字的聚合分
+DEBUG_AGGREGATE = True
+
+# ★ 删除 EARLY_EXIT_CONF —— 聚合方案里没有早退
 
 VALID_MIN, VALID_MAX = 1, 48
 
 
+# ============ 工具函数 ============
 def collect_image_paths(path):
     if os.path.isfile(path):
         return [path]
@@ -92,6 +105,7 @@ def find_center_and_crop(gray):
 
 
 def rotate_and_scale(gray, angle, scale=SCALE):
+    """灰度图上旋转 + 缩放（INTER_LINEAR）"""
     h, w = gray.shape[:2]
     cx, cy = w / 2.0, h / 2.0
     M = cv2.getRotationMatrix2D((cx, cy), angle, scale)
@@ -99,7 +113,7 @@ def rotate_and_scale(gray, angle, scale=SCALE):
     rad = math.radians(angle)
     cos_a, sin_a = abs(math.cos(rad)), abs(math.sin(rad))
     new_w = int(scale * (h * sin_a + w * cos_a))
-    new_h = int(scale * (w * sin_a + h * cos_a))
+    new_h = int(scale * (h * cos_a + w * sin_a))
 
     M[0, 2] += new_w / 2.0 - cx
     M[1, 2] += new_h / 2.0 - cy
@@ -110,6 +124,7 @@ def rotate_and_scale(gray, angle, scale=SCALE):
 
 
 def _parse_rec_output(result):
+    """兼容 PaddleX 多种格式，返回 [(text, score), ...]"""
     items = []
     if result is None:
         return items
@@ -151,6 +166,7 @@ def _parse_rec_output(result):
 
 
 def _parse_ori_output(result):
+    """解析方向分类结果，返回 0（正立）或 1（倒置 180°）"""
     if result is None:
         return 0
 
@@ -189,6 +205,7 @@ def _parse_ori_output(result):
 
 
 def _build_variants(roi):
+    """生成所有角度变体（0° 直接用原 ROI，不放大）"""
     variants = []
     for angle in ORDERED_ANGLES:
         if angle == 0:
@@ -202,6 +219,7 @@ def _build_variants(roi):
 
 
 def _in_valid_range(number_str):
+    """判断数字字符串解析后是否落在 [VALID_MIN, VALID_MAX] 内"""
     try:
         n = int(number_str)
     except (ValueError, TypeError):
@@ -209,11 +227,65 @@ def _in_valid_range(number_str):
     return VALID_MIN <= n <= VALID_MAX
 
 
+# ============ 数字聚合 ============
+def _aggregate_by_number(candidates, threshold=CONF_THRESHOLD):
+    """按数字把候选分组聚合。
+
+    candidates: [(text, score, angle), ...]
+    返回按 [聚合分, 最高分, 票数] 降序排序的列表：
+        [(num, agg_score, max_score, votes), ...]
+
+    聚合分 = Σ(score - threshold)，即每张票**高出准入门槛的那部分**之和。
+
+    为什么不是简单的 Σscore：Σscore 奖励的是「票数」，不看票的强弱，
+    于是「3 张勉强及格的弱票」会压过「2 张 0.9997 的强票」——
+    实测 `project_0\\data\\test3\\20.png` 就是这样被判成 '2' 的
+    （'2': 3 票 0.7407/0.7465/0.5999 = 2.0871，
+      '20': 2 票 0.9997/0.9993 = 1.9990）。减去噪声底后：
+    '2' = 0.5871 vs '20' = 0.9990，正确答案胜出。
+
+    减去 threshold 的效果：弱票几乎不贡献证据，强票贡献很多，
+    同时仍然保留「多角度互证」的性质 —— 两张 0.8 的票
+    （0.3+0.3=0.6）依然胜过一次 0.9 的票（0.4）。
+    """
+    groups = {}                        # num -> [scores...]
+    for text, score, angle in candidates:
+        groups.setdefault(text, []).append(score)
+
+    stats = []
+    for num, scores in groups.items():
+        # 聚合分：只累计高出准入门槛的部分（准入保证每项 >= 0）。
+        # 四舍五入到 6 位去掉浮点尾差 —— 否则「边际分相同 → 比票数」这一级
+        # 会被 1e-16 的误差抢先决定（0.9+0.9-1.0 与 0.9+0.7+0.7-1.5 本是同一个数）。
+        agg   = round(sum(s - threshold for s in scores), 6)
+        max_s = max(scores)                       # 最高单次分
+        votes = len(scores)                       # 有效票数
+        stats.append((num, agg, max_s, votes))
+
+    # 主键=聚合分；次键=最高分；再次=票数
+    stats.sort(key=lambda x: (x[1], x[2], x[3]), reverse=True)
+    return stats
+
+
+# ============ 核心：多角度识别 + 数字聚合 ============
 def ocr_best_result(roi):
+    """
+    逐角度推理，收集全部候选，按「数字聚合分」排序取结果。
+
+    1. 构建变体（按 |angle| 升序）
+    2. 每个变体：方向分类 → 必要时转 180° → 识别
+    3. 过滤低于阈值的、非数字的、'0'
+    4. **跑完全部角度后**再做聚合（见 `_aggregate_by_number`）——
+       这里不再有旧版的早退：聚合分要靠各个角度的票累加，
+       0° 就返回等于放弃后面的票。
+    5. 取聚合分最高的、且落在 [VALID_MIN, VALID_MAX] 的数字；
+       返回它在所有票里置信度最高的那一次的角度。
+
+    返回 (num, best_score, best_angle)；无有效候选则 None。
+    """
     rec = get_rec_engine()
     ori = get_ori_engine()
     variants = _build_variants(roi)
-
     candidates = []
 
     for img, angle in variants:
@@ -232,26 +304,37 @@ def ocr_best_result(roi):
             cleaned = "".join(ch for ch in text if ch.isdigit())
             if not cleaned:
                 continue
-            if cleaned == "0":
+            if cleaned == "0":                # ★ 扔掉 0，不进候选池
                 continue
             candidates.append((cleaned, score, angle))
-
-            if angle == 0 and score >= EARLY_EXIT_CONF and _in_valid_range(cleaned):
-                return (cleaned, score, None, angle)
 
     if not candidates:
         return None
 
-    candidates.sort(key=lambda x: x[1], reverse=True)
+    stats = _aggregate_by_number(candidates, CONF_THRESHOLD)
 
-    for cleaned, score, angle in candidates:
-        if _in_valid_range(cleaned):
-            return (cleaned, score, None, angle)
+    if DEBUG_AGGREGATE:
+        for num, agg, mx, cnt in stats:
+            print(f"    [聚合] {num!r}: margin={agg:.4f}  "
+                  f"max={mx:.4f}  votes={cnt}")
+
+    # 取第一个（聚合分最高的）且落在有效范围内的数字
+    for num, agg, mx, cnt in stats:
+        if not _in_valid_range(num):
+            continue
+        # 该数字命中过的所有角度里，挑置信度最高的那个
+        best_score, best_angle = max(
+            ((s, a) for n, s, a in candidates if n == num),
+            key=lambda x: x[0],
+        )
+        return (num, best_score, best_angle)
 
     return None
 
 
+# ============ 可视化 ============
 def _build_vis(img, crop_info, roi, num, conf, angle):
+    """在原图上画 ROI 红框 + ROI 旁小标签"""
     vis = img.copy()
     (cx, cy, r), (x1, y1, x2, y2) = crop_info[1], crop_info[2]
     x1, y1, x2, y2 = int(x1), int(y1), int(x2), int(y2)
@@ -270,6 +353,7 @@ def _build_vis(img, crop_info, roi, num, conf, angle):
     return vis
 
 
+# ============ 单张图片处理 ============
 def process_image(img_path, vis_dir=None):
     start_time = time.perf_counter()
     record = {
@@ -301,7 +385,8 @@ def process_image(img_path, vis_dir=None):
         record["elapsed_ms"] = round((time.perf_counter() - start_time) * 1000, 2)
         return record, img
 
-    num, conf, _box, angle = best
+    # ★ 新版返回三元组 (num, best_score, best_angle)
+    num, conf, angle = best
     record["number"] = num
     record["confidence"] = round(conf, 4)
     record["angle"] = angle
@@ -318,6 +403,7 @@ def process_image(img_path, vis_dir=None):
     return record, img
 
 
+# ============ 主流程 ============
 def main():
     total_start = time.perf_counter()
 

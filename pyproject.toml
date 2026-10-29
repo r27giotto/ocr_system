@@ -4,19 +4,13 @@ version = "0.1.0"
 description = "Add your description here"
 requires-python = ">=3.12"
 dependencies = [
-    # paddlex 3.7.2 要求 numpy<2.4，这里写 >=2.5.4 会导致无解
     "numpy>=2.3.5",
-    # 只保留 contrib 版（与 opencv-python 同版本，是其超集）。
-    # 同时声明两者会让它们争抢同一个 cv2/ 目录，先装谁谁生效。
     "opencv-contrib-python>=5.0.0.93",
-    "paddlepaddle>=3.3.1",
-    # 必须 >=3.7.2，3.4.3 没有注册 PP-OCRv6_small_rec / PP-OCRv6_medium_rec
-    "paddlex>=3.7.2",
-    # 下面三项 paddlex 只在 extras(cv/ocr-core/ocr/base) 里声明，裸装 paddlex 必然缺失：
-    # 缺 pypdfium2 / opencv-contrib-python -> PDFReaderBackend 不可用，任何 create_model 都失败
-    # 缺 python-bidi                     -> TextRecRunnerPredictor 不可用，v6 识别模型建不起来
     "pypdfium2>=5.14.0",
     "python-bidi>=0.6.11",
     "pyqt6>=6.11.0",
     "pyserial>=3.5",
+    "pyyaml>=6.0.2",
+    "pyqt6-sip>=13.13.0",
+    "paddlex>=3.7.2",
 ]

@@ -22,6 +22,15 @@ models:
   default_rec: "PP-OCRv6_small_rec"
   default_ori: "PP-LCNet_x1_0_textline_ori"
 
+engine:
+  # 推理设备：
+  #   auto  = 有可用 CUDA 就用 gpu:0，否则 cpu（换机器不用改配置）
+  #   gpu:0 = 强制显卡；gpu:1 同理
+  #   cpu   = 强制 CPU
+  # GPU 初始化失败（没装驱动/显存不足）时程序会自动退回 CPU 再试一次，
+  # 状态栏会提示，不会直接崩掉。
+  device: "auto"
+
 recognizer:
   # 单个候选进入聚合池的门槛（只做准入，不做择优）
   conf_threshold: 0.5

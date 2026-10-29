@@ -59,7 +59,7 @@ class RecognizerConfig:
     conf_threshold: float = CONF_THRESHOLD
     valid_min: int = 1
     valid_max: int = 48
-    drop_zero: bool = True
+    drop_zero: bool = False
     # 打印每个数字的聚合分/最高分/票数。调优阶段打开，稳定后关掉。
     debug_aggregate: bool = False
     # 【已废弃】旧版「0° 且 ≥ 该分数就立即返回」的早退阈值。
