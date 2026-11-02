@@ -1161,10 +1161,12 @@ $env:PYTHONIOENCODING = 'utf-8'   # 否则中文断言消息在 GBK 控制台是
 & $py -u test\test_source_state.py   # 开始/停止/再开始的按钮状态（m00002）
 & $py -u test\test_engine_ready.py   # 未加载/加载中/加载失败不许开跑（m00804）
 
-# 相机模式全流程（★ 会加载真模型，约 5 秒；无相机也能跑，用假相机模拟电眼触发）
-& $py -u test\test_camera_mode.py            # 6 帧、间隔 80ms
-& $py -u test\test_camera_mode.py -n 12 -i 300
-& $py -u test\test_camera_mode.py --backlog 1   # 反例对照：会故意失败（丢件数 > 0）
+# 相机模式全流程（★ 必须用网线接真相机；本机没有相机会 exit 2 并打印排查清单）
+& $py -u test\test_camera_mode.py                     # 软件触发 5 帧、间隔 300ms
+& $py -u test\test_camera_mode.py -n 10 -i 250        # 10 帧、250ms
+& $py -u test\test_camera_mode.py --trigger hardware  # 等电眼（Line1）触发
+& $py -u test\test_camera_mode.py --serial COM3       # 串口用真的（默认替身）
+& $py -u test\test_camera_mode.py --keep              # 保留 logs/_camera_test/ 的图片与 CSV
 
 # 装包（uv 在 D:\Python312，不在 E:\Python313；沙箱下先设可写的 UV_CACHE_DIR）
 & 'D:\Python312\Scripts\uv.exe' pip install <包名> --python $py
@@ -1262,4 +1264,4 @@ git add -A ; git commit -m "说明"
 | m05331 | 用户：「我需要启动时默认摄像头模式」→ `config.yaml` 的 `source.type: "camera"`（这个改动其实是用户 11:56 自己改的，随 `612c81c` 一并入库）；`SourcePanel` 启动即选中「摄像头」，显示「摄像头序号 / FPS / 测试摄像头」+「保存张数 / 原图历史 / 识别历史」+ 状态行 `未连接相机`，而路径框 / 间隔 / 循环**隐藏**。其余 `source.*` 键都可以省略（省略时走默认值 15 / 300 / false）。点「开始」仍被控制器两道闸拦住：先 `models_ready`，再 `camera_tested`（`app/controller.py:start_source`），所以启动态点开始会弹「模型未加载」或「请先点测试摄像头」|
 | m05411 | 用户：「帮我看一下还有什么要解决的问题或隐患，然后更新设计文档和记忆」→ **全量源码审计**（不只靠记忆）。修掉 7 项：`.gitignore` 补 3 条（`logs/*.bak-*.csv` / `logs/captures_raw/` / `logs/captures_result/`）、删死代码 `CameraSource`（+`threading`/`QThread` 导入）、`shutdown()` 等加载线程 `wait(60000)`、`InferenceWorker.stop` 超时 2000→30000、**停止时在飞帧不再丢记录**（`_close_csv_after_flight` + `_maybe_close_session_csv()`）、`closeEvent` 不再调 `shutdown()`（缺陷②关闭）、`requirements.txt` 从 0 字节改为说明文件。记下 **A1–A12** 12 条待处理隐患，详见 §7.4 |
 | m05837 | 用户说明生产节拍语义：「电眼检测到一个零件就发一次信号，摄像头拍一次照，可以确保摄像头内只有一个零件……每一帧就代表一个工件」→ 查证 **A3 是真丢件**：`CameraWorker._loop_capture` 取一张就 `_ack.wait(30.0)` 等推理完，期间电眼再触发时 `LatestImageOnly` **静默覆盖**中间帧。改为取图与推理解耦（emit 后立刻取下一张，FIFO 队列消费）+ `camera.max_backlog: 60` 硬背压。实测：假相机（单槽位覆盖）12 次触发 @30ms、每帧 100ms ⇒ **新 12/12（1.34s），旧等价配置 5/12（丢 indices 0,3,6,10,11）**。同时量出角度→耗时：8 角度 228ms / 24 角度 691ms / 72 角度 2024ms（约 28ms 每角度），即 8 角度上限 4.4 件/秒 |
-| m05970 | 用户：「在 test 目录下创建一个 test_camera_mode.py …… 测试全流程，从相机到推理到输出，然后能够打印每张图片的处理速度」→ 新增 **`test/test_camera_mode.py`**（约 430 行，**常驻**，与另外两套一起跑）：真 `AppController` + 真模型 + 真 CSV + 真落盘，只把 `BaslerCamera` 换成 `FakeBaslerCamera`（**如实模拟 `LatestImageOnly` 单槽位覆盖**）、`SerialService` 换成 `FakeSerial`（记录发出的 `'1'/'0'`）。落盘目录改到 `logs/_camera_test/`（已进 `.gitignore`），绝不碰真实历史；`max_saved_images=9999` 防滚动删。输出逐帧表（数字/判定/置信度/角度/状态/**推理ms**/**触发→结果ms**）+ 汇总（平均/最小/最大、端到端吞吐、峰值积压）+ 11 项断言（无 source_error / frames_in / results / 覆盖数=0 / 串口字节数 / 峰值积压≤max_backlog / 原图与结果图各 N 张 / 会话 CSV N+1 行 / 全局 CSV N+1 行）。实测 6 帧 @80ms：推理均值 242ms（首帧 337ms 冷启动）、端到端吞吐 4.13 帧/秒、峰值积压 5、覆盖 0，EXIT=0。**反例对照 `--backlog 1` 复现旧架构：6 次触发只取到 3 帧、相机内覆盖 3、EXIT=1** —— 证明这个脚本真能抓住解耦回归 |
+| m05970 | 用户：「在 test 目录下创建一个 test_camera_mode.py …… 测试全流程，从相机到推理到输出，然后能够打印每张图片的处理速度」；随后补一句「**我不需要虚拟摄像机，这个脚本需要真的用网线连接摄像头**」→ 最终形态 **`test/test_camera_mode.py`**（常驻测试，**必须插真相机**）：先 `enumerate_devices()`，0 台就打印排查清单（网线/供电/网段/巨帧/占用/Pylon Viewer）并 `exit 2`；有相机则用真 `BaslerCamera` + 真 `AppController`（真模型/真 CSV/真落盘），只在串口上默认用 `RecordSerial` 替身（`--serial COM3` 可用真串口）。两种触发：`--trigger software`（默认，把 `TriggerSource` 设成 `Software` 由脚本自己发，不用电眼）与 `--trigger hardware`（`Line1`，等电眼）。逐帧打印 **抓图/排队/推理/收尾/合计** 五段耗时 + 汇总吞吐与总耗时，8 项断言。落盘固定 `logs/_camera_test/`（已 gitignore）。配套给 `infra/basler_camera.py` 加了 `trigger_source` 配置项与 `software_trigger()` 方法（硬件触发路径不变，`TriggerActivation` 只在非 Software 时设）。**已实测**：无相机时 `exit 2` + 完整排查提示；`BaslerCamera` 触发配置 13 项断言全过（`Line1`→设 TriggerSource/TriggerActivation、`Software`→不碰 TriggerActivation、`software_trigger()` 计数、未 open 返回 False）。**带真相机的整条链路尚未跑过**（本机 0 台相机）|

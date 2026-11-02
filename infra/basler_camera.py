@@ -60,6 +60,9 @@ class BaslerCamera:
         cfg = dict(config or {})
         self.trigger_line = str(cfg.get("trigger_line", "Line1"))
         self.trigger_activation = str(cfg.get("trigger_activation", "RisingEdge"))
+        # 触发源：`Line1` = 电眼接在相机的输入线上（生产用法）；
+        # `Software` = 由软件调 `software_trigger()` 出图（没有电眼时联调用）。
+        self.trigger_source = str(cfg.get("trigger_source", "Line1"))
         self.exposure_us = float(cfg.get("exposure_us", 2000))
         self.timeout_ms = int(cfg.get("timeout_ms", 1000))
 
@@ -184,8 +187,26 @@ class BaslerCamera:
     def _apply_trigger(self) -> None:
         self._set("TriggerSelector", "FrameStart", "硬件触发")
         self._set("TriggerMode", "On", "硬件触发")
-        self._set("TriggerSource", self.trigger_line, "硬件触发")
-        self._set("TriggerActivation", self.trigger_activation, "硬件触发")
+        self._set("TriggerSource", self.trigger_source, "硬件触发")
+        if self.trigger_source != "Software":
+            # `TriggerActivation` 只对硬件输入线有意义，软件触发下设它多半报「不支持」
+            self._set("TriggerActivation", self.trigger_activation, "硬件触发")
+
+    def software_trigger(self) -> bool:
+        """手动发一次触发（仅 `TriggerSource=Software` 时有效）。
+
+        用于没有电眼时联调：调一次就出一张图。失败抛 `CameraError`。
+        """
+        cam = self._cam
+        if cam is None:
+            return False
+        try:
+            cam.ExecuteSoftwareTrigger()
+            return True
+        except Exception as exc:
+            raise CameraError(
+                "软件触发失败：%s\n（相机需要是 TriggerSource=Software）" % (exc,)
+            ) from exc
 
 
 def _to_bgr(arr: np.ndarray, pixel_type=None) -> np.ndarray:
