@@ -723,11 +723,11 @@ layout 即可，不要单独 setVisible。** 三种模式下面板高度实测�
 - `app.save_csv: false` 时两份都不写。
 - 表头只在文件**新建或清空**时写一次；追加时用纯 utf-8（避免 BOM 跑到文件中间）。
 
-**表头是中文**（m04963，用户要求）。列顺序固定，9 列：
+**表头全是中文**（m04963），**第 1 列是可读时间、精确到毫秒**（m05032）。列顺序固定，9 列：
 
 | # | 表头 | 内部字段名 | 说明 |
 |---|---|---|---|
-| 1 | 时间戳 | `timestamp` | Unix 秒，3 位小数 |
+| 1 | 时间 | `timestamp` | `2026-11-02 11:19:30.644` —— 本地时间，毫秒精度（不再是 Unix 秒） |
 | 2 | 文件名 | `filename` | 摄像头是 `20261102_111930/000001`（会话目录 + 序号） |
 | 3 | 识别数字 | `number` | 识别失败为空 |
 | 4 | 置信度 | `confidence` | 4 位小数，失败为 `0.0` |
@@ -739,11 +739,16 @@ layout 即可，不要单独 setVisible。** 三种模式下面板高度实测�
 
 `CsvLogger.FIELDS` 仍是英文内部名（程序按它取值），`CsvLogger.HEADERS` 是写进文件的
 中文表头，两者用 `_HEADER_OF` 一一对应 —— 改表头文案不会动到任何调用方。
+时间列由模块级函数 `format_time(ts)` 生成（`datetime.fromtimestamp(...).strftime(...)`
+取到毫秒），非法值返回空串。
 
-**老文件迁移**：v2.1 之前写的是英文表头。`CsvLogger` 打开一个「表头不是中文」的旧文件时，
-会先复制一份 `<名字>.bak-<YYYYmmdd-HHMMSS>.csv` 留档，再把**原文件原地**改成中文表头
-（数据行一条不动）。★ 故意不用 `os.replace` 改名 —— `logs/results.csv` 常被运行中的
-程序实例占着，改名会 `WinError 32 另一个程序正在使用此文件`。
+**老文件迁移**：`CsvLogger` 打开一个表头不是当前这套的文件时，先复制一份
+`<名字>.bak-<YYYYmmdd-HHMMSS>.csv` 留档，再把**原文件原地**升级：换表头 +
+**第 1 列的 Unix 秒转成可读时间**（其余列照抄）。认得出两种历史表头
+（`_LEGACY_HEADERS`：v2.1 英文表头、v2.2「时间戳」+Unix 秒）；**认不出的表头不动**，
+避免误改别人的文件。
+★ 故意不用 `os.replace` 改名 —— `logs/results.csv` 常被运行中的程序实例占着，
+改名会 `WinError 32 另一个程序正在使用此文件`。
 
 **⚠️ 注意**：CSV 记全部行，PNG 受 `camera.max_saved_images` 滚动裁剪 —— 跑很多帧时
 **CSV 条数会多于 PNG 张数**，这是设计如此（CSV 是台账，图片只是留证）。
@@ -1128,3 +1133,4 @@ git add -A ; git commit -m "说明"
 | m04827 | 用户（配摄像头模式截图）："将"保存"改成"保存张数"，输入框里只显示数字"→ `ui/widgets/source_panel.py`：标签 `QLabel("保存:")` → `QLabel("保存张数:")`；`spin_max_saved.setSuffix("")`（原来是 `" 张"`），单位交给左边标签表达。验收 6 项全过（`_verify_savelabel.py`，已删）：标签在、旧标签没了、框内恒为纯数字（10 / 改 37 后仍是 `"37"`）、前缀后缀皆空 |
 | m04872 | 用户（配「检测结果」截图，红框圈住「识别数字:」与下一行的 `5`）："识别结果面板中，识别数字和数字我要在同一行" → `ui/widgets/result_panel.py`：原来 `v.addWidget(QLabel("识别数字:"))` + `v.addWidget(self.number_label)` 是两行，改成 `QHBoxLayout`（标签 + `number_label` + 末尾 `addStretch()`），数字对齐从 `AlignCenter` 改为 `AlignLeft | AlignVCenter`，字号仍是 22px 粗体。验收 7 项全过（`_verify_resultrow.py`，已删）：标签 `QRect(14,29,60,22)` 与数字 `QRect(80,29,22,22)` **顶边与高度完全一致**、数字在标签右侧、两位数 `42` 不换行、字号未变 |
 | m04963 | 用户：「我想记录的csv表头都是中文」→ `infra/csv_logger.py`：新增 `HEADERS`（时间戳/文件名/识别数字/置信度/角度/命中目标/判定值/状态/耗时(毫秒)）与 `_HEADER_OF` 映射，`DictWriter(fieldnames=HEADERS)`，`write()` 按中文键写；`FIELDS` 保持英文内部名不动。**老文件自动迁移**：打开时若首行 != `HEADERS`，先复制一份 `<名字>.bak-<时间戳>.csv`，再**原地**重写表头（数据行保留）——不用 `os.replace`，因为 `logs/results.csv` 常被运行中的实例占着、改名必然 `WinError 32`。验收 19 项全过（`_verify_csv_zh.py`，已删）：中文表头 / BOM / 追加不重复表头 / 旧英文表头自动迁移且数据不丢 / 表头已正确时不再备份 / 覆盖模式重写表头 / `FIELDS` 与 `HEADERS` 一一对应。真实 `logs/results.csv` 已迁移（33 条数据保留，备份 `results.bak-20261102-114710.csv`）|
+| m05032 | 用户：「时间戳改成时间精确到毫秒」→ `infra/csv_logger.py`：新增模块级 `format_time(ts)`（`datetime.fromtimestamp(...).strftime("%Y-%m-%d %H:%M:%S.%f")[:-3]`，非法值返回空串），`write()` 的 `timestamp` 改用它；表头「时间戳」→ **「时间」**；新增 `_LEGACY_HEADERS`（v2.1 英文 / v2.2「时间戳」+Unix 秒）与 `_to_time_text()`，迁移时把第 1 列的 Unix 秒**转成可读时间**（其余列照抄、认不出的表头不动）。验收 28 项全过（`_verify_csv_time.py`，已删）：格式 `2025-10-09 16:53:19.123` 毫秒精度 / 非法值空串 / 新文件与追加 / 旧中文表头迁移且 Unix 秒转成时间、备份保留原始值 / 旧英文表头同迁移 / 表头已对时不重复转换 / 陌生表头不改写 / 覆盖模式。真实 `logs/results.csv` 已迁移（33 条数据保留，首条 `2026-11-02 11:19:30.644`，备份 `results.bak-20261102-115024.csv`）|
