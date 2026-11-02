@@ -68,6 +68,31 @@ source:
   # 否则跑完一遍就停。
   loop: false
 
+# 历史面板保留条数（默认 10）。**这个数字会从界面写回本文件** —— 改完重启仍在。
+history:
+  max_items: 10
+
+# 摄像头模式：Basler acA1300-60gm（GigE）+ NPN 电眼硬件触发。
+# 硬件与接线不在本程序范围内，这里只管「怎么把图取进来」。
+camera:
+  # 电眼接在相机的哪一路 I/O，以及哪个电平沿有效。
+  # ⚠️ 这两个值必须按现场接线调：接反了要么一张不出，要么连续出图。
+  trigger_line: "Line1"
+  trigger_activation: "RisingEdge"   # RisingEdge / FallingEdge
+  # 曝光时间（微秒）。太亮会糊、太暗识别不了，按现场光照和传送速度调。
+  exposure_us: 2000
+  # 单次取图的超时。产线没工件过来时超时是正常的，只写日志、不弹窗。
+  timeout_ms: 1000
+  # 磁盘上保留多少张。**这个数字会从界面写回本文件**。
+  # 两个目录各自独立滚动：进第 N+1 张就删各自最旧的一张。
+  max_saved_images: 10
+
+storage:
+  # 相机原图（未叠任何框/字）
+  capture_raw_dir: "./logs/captures_raw"
+  # 带框 + 数字 + 置信度的结果图
+  capture_result_dir: "./logs/captures_result"
+
 serial:
   baudrate: 115200
   last_port: "COM3"
