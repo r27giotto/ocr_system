@@ -723,6 +723,28 @@ layout 即可，不要单独 setVisible。** 三种模式下面板高度实测�
 - `app.save_csv: false` 时两份都不写。
 - 表头只在文件**新建或清空**时写一次；追加时用纯 utf-8（避免 BOM 跑到文件中间）。
 
+**表头是中文**（m04963，用户要求）。列顺序固定，9 列：
+
+| # | 表头 | 内部字段名 | 说明 |
+|---|---|---|---|
+| 1 | 时间戳 | `timestamp` | Unix 秒，3 位小数 |
+| 2 | 文件名 | `filename` | 摄像头是 `20261102_111930/000001`（会话目录 + 序号） |
+| 3 | 识别数字 | `number` | 识别失败为空 |
+| 4 | 置信度 | `confidence` | 4 位小数，失败为 `0.0` |
+| 5 | 角度 | `angle` | 命中的最优角度 |
+| 6 | 命中目标 | `hit` | 识别数字是否在 `target.numbers` 里（`True`/`False`） |
+| 7 | 判定值 | `output_value` | `1` = NG、`0` = G；串口按这个原值发 |
+| 8 | 状态 | `status` | `ok` / `no_number` / `circle_not_found` / `read_failed` |
+| 9 | 耗时(毫秒) | `elapsed_ms` | 单帧端到端 |
+
+`CsvLogger.FIELDS` 仍是英文内部名（程序按它取值），`CsvLogger.HEADERS` 是写进文件的
+中文表头，两者用 `_HEADER_OF` 一一对应 —— 改表头文案不会动到任何调用方。
+
+**老文件迁移**：v2.1 之前写的是英文表头。`CsvLogger` 打开一个「表头不是中文」的旧文件时，
+会先复制一份 `<名字>.bak-<YYYYmmdd-HHMMSS>.csv` 留档，再把**原文件原地**改成中文表头
+（数据行一条不动）。★ 故意不用 `os.replace` 改名 —— `logs/results.csv` 常被运行中的
+程序实例占着，改名会 `WinError 32 另一个程序正在使用此文件`。
+
 **⚠️ 注意**：CSV 记全部行，PNG 受 `camera.max_saved_images` 滚动裁剪 —— 跑很多帧时
 **CSV 条数会多于 PNG 张数**，这是设计如此（CSV 是台账，图片只是留证）。
 
@@ -1105,3 +1127,4 @@ git add -A ; git commit -m "说明"
 | m04783 | 用户（配三张截图）："修复bug：选择文件夹模式不要显示 摄像头：FPS：保存：，单图模式不要显示 间隔： 摄像头：FPS： 保存：" → 根因：`ui/widgets/source_panel.py` 的 `_update_mode_visibility()` 只 `setVisible` 了**输入控件**，没管同行的 `QLabel("间隔:")` / `QLabel("摄像头:")` / `QLabel("FPS:")` / `QLabel("保存:")`，控件一藏标签就成了孤儿文字。→ 改法：每行套一个 `QWidget` 容器（`_wrap_row()`），整行一起显示/隐藏，隐藏的行在布局里不占高度。验收 27 项全过（`_verify_modes.py`，已删）：三种模式下该出现的标签/控件在、不该出现的不在；面板高度 文件夹 143 / 单图 114 / 摄像头 162 px |
 | m04827 | 用户（配摄像头模式截图）："将"保存"改成"保存张数"，输入框里只显示数字"→ `ui/widgets/source_panel.py`：标签 `QLabel("保存:")` → `QLabel("保存张数:")`；`spin_max_saved.setSuffix("")`（原来是 `" 张"`），单位交给左边标签表达。验收 6 项全过（`_verify_savelabel.py`，已删）：标签在、旧标签没了、框内恒为纯数字（10 / 改 37 后仍是 `"37"`）、前缀后缀皆空 |
 | m04872 | 用户（配「检测结果」截图，红框圈住「识别数字:」与下一行的 `5`）："识别结果面板中，识别数字和数字我要在同一行" → `ui/widgets/result_panel.py`：原来 `v.addWidget(QLabel("识别数字:"))` + `v.addWidget(self.number_label)` 是两行，改成 `QHBoxLayout`（标签 + `number_label` + 末尾 `addStretch()`），数字对齐从 `AlignCenter` 改为 `AlignLeft | AlignVCenter`，字号仍是 22px 粗体。验收 7 项全过（`_verify_resultrow.py`，已删）：标签 `QRect(14,29,60,22)` 与数字 `QRect(80,29,22,22)` **顶边与高度完全一致**、数字在标签右侧、两位数 `42` 不换行、字号未变 |
+| m04963 | 用户：「我想记录的csv表头都是中文」→ `infra/csv_logger.py`：新增 `HEADERS`（时间戳/文件名/识别数字/置信度/角度/命中目标/判定值/状态/耗时(毫秒)）与 `_HEADER_OF` 映射，`DictWriter(fieldnames=HEADERS)`，`write()` 按中文键写；`FIELDS` 保持英文内部名不动。**老文件自动迁移**：打开时若首行 != `HEADERS`，先复制一份 `<名字>.bak-<时间戳>.csv`，再**原地**重写表头（数据行保留）——不用 `os.replace`，因为 `logs/results.csv` 常被运行中的实例占着、改名必然 `WinError 32`。验收 19 项全过（`_verify_csv_zh.py`，已删）：中文表头 / BOM / 追加不重复表头 / 旧英文表头自动迁移且数据不丢 / 表头已正确时不再备份 / 覆盖模式重写表头 / `FIELDS` 与 `HEADERS` 一一对应。真实 `logs/results.csv` 已迁移（33 条数据保留，备份 `results.bak-20261102-114710.csv`）|
