@@ -147,6 +147,9 @@ class MainWindow(QMainWindow):
         # 空文件夹、启动失败四条路径都会把它置回 False。
         self.controller.source_state.connect(self.source_panel.set_running)
         self.controller.source_error.connect(self._on_source_error)
+        # 非阻断提示（本次运行的 CSV 落在哪 / 写失败）只写状态栏
+        self.controller.notice.connect(
+            lambda msg: self.status_bar.showMessage(msg, 8000))
 
         # 历史项点击 → 主图区回看
         self.history_panel.item_clicked.connect(self._on_history_clicked)

@@ -691,7 +691,7 @@ Controller._on_result:
 | **D4** | `config.yaml:8-9` 与 `core/recognizer.py:16-17` | `valid_min`/`valid_max` **两处重复定义**，会漂移。 | 中 |
 | **D5** | `ui/widgets/source_panel.py:94` + `app/controller.py:80-85` | 界面有"单图"选项，但 controller 只认 `camera` 和 `else`（都走文件夹）。选单图会拿到文件路径当作文件夹。 | 中 —— **【我的判断】应把「单图」实现为真实的第三种模式**（载入单张图 → 处理一次 → 停止；结果照常进 CSV/历史）。理由：界面已提供该选项，删掉它是破坏功能，实现它是安全默认。 |
 | **D6** | `core/models.py:19` + `ui/widgets/history_panel.py:66` | `frame` 存**整帧** + `MAX_ITEMS = 200` → 最多 200 张整帧常驻内存。 | 中 |
-| **D7** | `infra/csv_logger.py:16` | `open(self.path, "w", ...)` —— **每次启动清空 `logs/results.csv`**，历史留档丢失。 | 中 |
+| ~~D7~~ | `infra/csv_logger.py` | ~~`open(self.path, "w", ...)` —— **每次启动清空 `logs/results.csv`**，历史留档丢失。~~ | ✅ **已修（m04619）**：默认追加，表头只写一次；另外每次运行另存一份会话 CSV（见 §16.7）。 |
 | **D8** | `main.py:32` + `ui/main_window.py:150` | **两处**都会调 `controller.shutdown()` → 关闭时执行两次。 | 低 |
 | **D9** | `core/pipeline.py:45` | 调 `decider.decide(num)` 未传 `status`，而 `decision.py:23` 有这个参数（默认 `"ok"`）→ 参数形同虚设。 | 低 |
 | ~~D10~~ | `resources/icons/` + 根目录 | ~~空目录，无图标资源。~~ | ✅ **已解决（m00434）**：`resources/icons/ocr.ico` + 根目录 `OCR系统.lnk` / 桌面快捷方式，双击即启动（见 §14）。 |
@@ -1046,7 +1046,9 @@ logs/
 | 每次点「开始」按**时间戳**建子目录，两个目录同名 | 同上 |
 | **原图存相机原始帧**，不叠加任何框/字 | 【我的判断】，原图是唯一能事后重跑的素材 |
 | **滚动上限作用于两个基础目录的全局**：各自只留最新 `camera.max_saved_images` 张，进新的删最旧，删空的旧会话目录一并删除 | 用户 m04130 选 **B** 方案（不是只限单次会话） |
-| **只对摄像头模式生效**；文件夹/单图模式不落盘 | 【我的判断】：源图本来就在磁盘上，复制一份纯属浪费 |
+| **只对摄像头模式生效**；文件夹/单图模式不落盘图片 | 【我的判断】：源图本来就在磁盘上，复制一份纯属浪费 |
+| **但每次运行都另存一份 CSV**（m04619）：摄像头 → `captures_result/<时间戳>/results.csv`（与 PNG 同目录）；文件夹 → `<所选文件夹>/results_<时间戳>.csv`；单图 → `<图片目录>/results_<时间戳>.csv`。全局 `logs/results.csv` 改为**追加**，跨运行累积 | 用户 m04619：「第 1 步照做，第 2 步改成追加保留，同时文件/单图模式会在选择的文件或目录下生成csv」 |
+| **CSV 与图片不同步裁剪**：CSV 记全部行，PNG 受滚动上限约束 —— 跑很多帧时 CSV 条数会多于 PNG 张数 | 【我的判断】，CSV 是台账、图片只是留证 |
 
 **`RecognitionResult.filename` 该填什么**：填**文件名本身**（`11-30-15-213.png`），不填全路径。
 理由：全路径里带着 `logs/captures_raw/<时间戳>/`，一旦滚动删除或换机器就对不上了；

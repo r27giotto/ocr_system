@@ -495,8 +495,8 @@ demo 用的样张目录：E:\Python Project\project_0\data\test3   （11 张图�
 | `infra/image_source.py` | 162 | `FolderSource`（single-shot 定时器，一帧在飞）/ `CameraSource`（`threading.Event` 等 ack）；`read_failed` 上报坏图；**`stop()` 不发 `finished`**（状态由 controller 统一发，见 §6.4） | ✅ 已实测（见 §6.4） |
 | `infra/serial_service.py` | 66 | 简化版串口；发裸 `b'1'`/`b'0'`（协议已由固件定案，见 §5.4.1） | ⚠️ 未接过真设备 |
 | `arduino/sketch_oct19a/sketch_oct19a.ino` | 42 | **用户写的**接收端固件：`'1'`→开阀 100ms→自动关，`'0'`→立即关 | ✅ **已烧录，行为符合预期**（m03767）；⚠️ 未与 Python 侧联调 |
-| `infra/csv_logger.py` | 38 | CSV 记录 | ⚠️ **有截断缺陷，见缺陷①** |
-| `app/controller.py` | 372 | `AppController`（编排层）；**每帧必发一个串口字节**，`frames_in`/`results_out` 对账；**`source_state` 是输入源运行状态的唯一真源**（只在变化时发，m00002）；**`models_ready`/`_loading` 是模型就绪状态的唯一真源**（未加载/加载中拒开跑、运行中拒绝加载，m00804）；**摄像头模式**：`test_camera()` / `camera_tested` 门禁 / `capture_store` 生命周期（§6.5） | ✅ 已实测（见 §6.4、§6.5、§7.3） |
+| `infra/csv_logger.py` | 56 | CSV 记录；**默认 `mode="a"` 追加**（表头只在新建/清空时写一次），会话表用 `mode="w"`。见 §6.6 | ✅ 已实测（§6.6） |
+| `app/controller.py` | 433 | `AppController`（编排层）；**每帧必发一个串口字节**，`frames_in`/`results_out` 对账；**`source_state` 是输入源运行状态的唯一真源**（只在变化时发，m00002）；**`models_ready`/`_loading` 是模型就绪状态的唯一真源**（未加载/加载中拒开跑、运行中拒绝加载，m00804）；**摄像头模式**：`test_camera()` / `camera_tested` 门禁 / `capture_store` 生命周期（§6.5）；**CSV 双写**：全局总账 + 本次运行的会话表（§6.6） | ✅ 已实测（见 §6.4、§6.5、§6.6、§7.3） |
 | `app/workers.py` | 190 | `EngineLoadWorker` / `InferenceWorker`；**队列不丢帧**，`frame_processed` 做背压；**`CameraWorker`**（预览 `mode="free"` / 采图 `mode="trigger"`，`_ack.wait(30)` 背压，超时发 `warn`） | ✅ 已实测（见 §6.4、§6.5） |
 | `ui/main_window.py` | 258 | 主窗口，组装七个面板；竖直 `QSplitter` 分隔历史区，右列包 `QScrollArea`；状态栏显示 `→ G/NG` 与 `待处理 N`；`source_state → set_running`、`source_error → 状态栏`（摄像头模式额外弹窗）、`engine_busy → source_panel.set_engine_busy`；**相机**：`preview_ready → image_view`、`open_dir_requested → _on_open_dir`（`QDesktopServices` 打开目录）、`max_saved_changed → _on_max_saved_changed`（写回 config.yaml） | ✅ 已实测（见 §6.1 / §6.3 / §6.4 / §6.5 / §7.3） |
 | `ui/overlay.py` | 8 | 只是 `from core.render import draw_overlay` 的 re-export（画框逻辑已迁到 `core/render.py`） | ✅ 已实测 |
@@ -693,6 +693,38 @@ pending     = frames_in - results_out   ← 正常恒为 0；界面状态栏显�
 `trigger` 模式、建会话目录、原图与结果图**同名同数量**（实测 8 对）、真出识别结果；
 停止后 `current_source` 归 None；点「保存张数」写回临时配置且**不动真配置**；超上限被裁。
 
+### 6.6 ★ CSV 记录：全局总账（追加）+ 每次运行一份（m04619）
+
+**两份 CSV，同时写**（`app/controller.py:_on_result` 的步骤 2）：
+
+| 哪份 | 路径 | 开法 |
+|---|---|---|
+| 全局总账 | `config.yaml` 的 `app.csv_output`，默认 `./logs/results.csv` | **追加**（`mode="a"`），跨运行累积 |
+| 本次运行 | 见下表 | **覆盖**（`mode="w"`），一次运行一份 |
+
+**本次运行的 CSV 落在哪**（`AppController._session_csv_target`）：
+
+| 模式 | 路径 |
+|---|---|
+| 摄像头 | `<storage.capture_result_dir>/<YYYYMMDD_HHMMSS>/results.csv` —— 和那批带框图**同一目录** |
+| 文件夹 | `<所选文件夹>/results_<YYYYMMDD_HHMMSS>.csv` |
+| 单图 | `<所选图片所在目录>/results_<YYYYMMDD_HHMMSS>.csv` |
+
+- 生命周期：`start_source()` 里开、`stop_source()` / 自然跑完 / 启动失败 / `shutdown()`
+  里关（`_close_session_csv`）。运行期间 `controller.session_csv_path` 给出路径。
+- 写失败**不阻断运行**：只在状态栏提示「本次运行的 CSV 写不了（只记全局那份）」，
+  全局总账照写。
+- `app.save_csv: false` 时两份都不写。
+- 表头只在文件**新建或清空**时写一次；追加时用纯 utf-8（避免 BOM 跑到文件中间）。
+
+**⚠️ 注意**：CSV 记全部行，PNG 受 `camera.max_saved_images` 滚动裁剪 —— 跑很多帧时
+**CSV 条数会多于 PNG 张数**，这是设计如此（CSV 是台账，图片只是留证）。
+
+**验收**（`_verify_csv.py`，临时已删，EXIT=0，25 项全过）：新建写表头 / 重开追加不重复
+表头 / 覆盖模式只剩本次；全局总账预置一行「上一次运行」后仍在，跑完变成 3 行且表头
+只有一个；文件夹模式会话表落在所选目录、2 条、内容与全局表一致；单图模式落在图片目录、
+1 条；摄像头模式会话表就是 `<识别历史>/<时间戳>/results.csv`、PNG 张数与记录数一致。
+
 ---
 
 ## 7. 缺陷清单
@@ -738,7 +770,7 @@ AppController + MainWindow(真配置)        构造成功，标题 "OCR 识别�
 
 | # | 位置 | 问题 | 建议 |
 |---|---|---|---|
-| ① | `infra/csv_logger.py:16` | `open(self.path, "w", ...)` —— **每次启动清空 `logs/results.csv`** | 改 `"a"`，或按 `app.save_csv` 决定 |
+| ~~①~~ | `infra/csv_logger.py` | ~~`open(self.path, "w", ...)` —— 每次启动清空 `logs/results.csv`~~ | ✅ **已修（m04619）**：默认追加，表头只写一次。见 §6.6 |
 | ② | `main.py:32` + `ui/main_window.py:150` | 两边都连/调 `controller.shutdown()` → **关闭时执行两次** | 只保留一处 |
 | ③ | `config.yaml:8-9` 与 `:22-25` | `valid_min`/`valid_max` 在 `target:` 和 `recognizer:` **重复定义**，会漂移 | 收敛到一处 |
 | ④ | ~~`config.yaml:44-50`~~ | ~~`source:` 段**根本没被读取**；`SourcePanel` 里硬编码 15fps / 300ms / loop~~ | ✅ **已修**（见 §7.1） |
@@ -1063,3 +1095,4 @@ git add -A ; git commit -m "说明"
 | — | 文档同步（同一次）：设计文档升 **v2.0** —— 表头日期+v2.0 变更行、§10 J5 备注改写为「实际缺口更大：加载锁会堵输入源线程」、§11 **新增 D13**（含三处根因与修法/行号）、§13 新增**第 13 条验收**（模型门禁）、§14 状态表加一行；本文件：表头、§6 四个模块行数与状态、§7.3 新增、§11 常用命令加两套回归、本时间线 |
 | m01023 | 用户装好 git 后：「创建git本地仓库并提交」→ **仓库建立**：git 2.56.0 在 `D:\Git\cmd\git.exe`（机器级 PATH 已含，但运行中的 shell 需刷新 PATH 才看得见）；`git init` + 分支改 `main`；仓库级身份 `ocr_system <ocr_system@localhost>`（全局为空，没动）；`.gitignore` 挡住 `.venv/`（4.6 GB）、`models/`（477 MB）、`logs/*.log|*.csv`、`__pycache__`、`_*` 探针文件；`.gitattributes` 统一 `eol=lf` 并把图片/权重标成 binary。首个提交 **`72a89fa`**：45 文件 / 7,504 行（含 `ocr.ico`、`OCR系统.lnk`、`uv.lock`、`test_engine_ready.py`），工作区干净。**无远程**，所以只能本地提交 |
 | m04085–m04303 | 用户提出 Basler 相机模式（acA1300-60gm，黑白，硬件触发 5fps，NPN 电眼，网线直连），并且**明确要求先讨论、后改代码**。设计文档升到 v2.1 新增 §16（相机选型/预览与采图两种打开模式/硬触发接线/测试摄像头门禁/落盘与会话目录/滚动上限/启动顺序）。获批后实现：新增 infra/basler_camera.py / infra/capture_store.py / infra/config_writer.py / core/render.py，pp/workers.py 加 CameraWorker，pp/controller.py 加 camera_tested 门禁与 capture_store，ui/widgets/source_panel.py 加「测试摄像头 / 保存张数 / 原图历史 / 识别历史」，ui/main_window.py 接预览与目录打开，config.yaml 加 history / camera / storage 三段。pypylon 26.9 已 uv 装好（纯 wheel，不依赖 Pylon SDK）。验收 35 项全过（假相机）。**⚠️ 没有硬件，全部未经真机验证** |
+| m04619 | 用户："第 1 步照做，第 2 步改成追加保留，同时文件/单图模式会在选择的文件或目录下生成csv" → `infra/csv_logger.py` 的 `CsvLogger(path, mode="a")` 默认**追加**，表头只在新建/清空时写一次（修掉缺陷 ①「每次启动清空 results.csv」）；`app/controller.py` 新增 `_session_csv_target` / `_open_session_csv` / `_close_session_csv`，每次「开始」多开一份**本次运行**的 CSV：摄像头在 `<识别历史>/<时间戳>/results.csv`、文件夹在 `<所选文件夹>/results_<时间戳>.csv`、单图在 `<图片目录>/results_<时间戳>.csv`；`_on_result` 改成**双写**；新增 `notice` 信号只进状态栏；`ui/main_window.py` 接 `notice`。验收 25 项全过 |

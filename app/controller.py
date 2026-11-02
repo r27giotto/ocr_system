@@ -1,4 +1,6 @@
+import os
 import traceback
+from datetime import datetime
 
 from PyQt6.QtCore import QObject, pyqtSignal
 
@@ -37,6 +39,9 @@ class AppController(QObject):
     # ---- 相机模式 ----
     preview_ready = pyqtSignal(object)       # 「测试摄像头」的预览帧（不进推理）
     camera_status = pyqtSignal(str)          # 相机面板上那行状态文字
+    # 提示信息（不阻断、只写状态栏）：本次会话 CSV 写到哪、写失败等。
+    # 不能用 source_error —— 那个在摄像头模式会弹窗，而这里只是「顺带没写成」。
+    notice = pyqtSignal(str)
 
     def __init__(self, config: dict):
         super().__init__()
@@ -82,6 +87,9 @@ class AppController(QObject):
         self.camera_tested = False
         self._preview_worker = None
         self.capture_store = None
+        # 本次运行的 CSV（一次运行一份，跟着运行起止开合）
+        self._session_csv = None
+        self.session_csv_path = None
         # ★ 引擎状态：只有**加载成功**才把模型名交给 Recognizer。
         #   以前在 load_models() 开头就 set_models()，加载一失败，
         #   rec_model_name 已经是新名字，之后每帧都抛
@@ -204,11 +212,53 @@ class AppController(QObject):
         self.camera_status.emit("开拍中，存到 %s" % (raw_path,))
         print("[camera] 原图 ->", raw_path)
         print("[camera] 结果 ->", result_path)
+        # 本次运行的 CSV 就放在「识别历史」那棵树里，跟 PNG 同目录
+        self._open_session_csv(
+            self._session_csv_target("camera", "", result_path))
         worker = CameraWorker(self.config.get("camera", {}), mode="capture",
                               store=self.capture_store)
         worker.error.connect(self._on_camera_error)
         worker.warn.connect(self.camera_status.emit)
         return worker
+
+    # ---------- 本次运行的 CSV ----------
+    def _session_csv_target(self, kind: str, path: str,
+                            result_dir: str = None) -> str:
+        """算出「本次运行」的 CSV 路径。
+
+        - 摄像头：`<识别历史>/<时间戳>/results.csv`，和那批带框图放一起
+        - 文件夹：`<所选文件夹>/results_<时间戳>.csv`
+        - 单图  ：`<图片所在目录>/results_<时间戳>.csv`
+        """
+        if kind == "camera" and result_dir:
+            return os.path.join(result_dir, "results.csv")
+        stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        folder = os.path.dirname(os.path.abspath(path)) if kind == "single" \
+            else os.path.abspath(path)
+        return os.path.join(folder, "results_%s.csv" % (stamp,))
+
+    def _open_session_csv(self, target: str):
+        """开一份新的会话 CSV。写不进去**不阻断运行**，只在状态栏说一声 ——
+        全局总账还会照写，不至于一张记录都不留。"""
+        self._close_session_csv()
+        try:
+            self._session_csv = CsvLogger(target, mode="w")
+            self.session_csv_path = target
+            self.notice.emit("本次记录已开：%s" % (target,))
+        except Exception as e:
+            self._session_csv = None
+            self.session_csv_path = None
+            traceback.print_exc()
+            self.notice.emit("本次运行的 CSV 写不了（只记全局那份）：%s" % (e,))
+
+    def _close_session_csv(self):
+        if self._session_csv is not None:
+            try:
+                self._session_csv.close()
+            except Exception:
+                pass
+            self._session_csv = None
+        self.session_csv_path = None
 
     # ---------- 输入源 ----------
     def start_source(self, cfg: dict):
@@ -244,6 +294,8 @@ class AppController(QObject):
             path = cfg["path"]
             loop = cfg["loop"] and t == "folder"
             src = FolderSource(path, cfg["interval_ms"], loop)
+            # 文件 / 单图模式：CSV 直接落到所选目录（单图则落到图片所在目录）
+            self._open_session_csv(self._session_csv_target(t, path))
         src.frame_ready.connect(self._on_frame)
         # 只有文件类输入源会发 read_failed；相机线程没有这个信号
         if hasattr(src, "read_failed"):
@@ -261,17 +313,20 @@ class AppController(QObject):
             # 路径不存在 / 摄像头参数非法等：必须退回空闲，否则「开始」永远灰着
             traceback.print_exc()
             self.current_source = None
+            self._close_session_csv()
             self._set_source_state(False)
             self.source_error.emit(str(e))
 
     def stop_source(self):
         src, self.current_source = self.current_source, None
         if src is None:
+            self._close_session_csv()
             return
         # 先落回空闲再 stop()：摄像头 stop 要等读帧线程退出（最多 2s），
         # 这段时间界面不该还显示「运行中」。
         self._set_source_state(False)
         src.stop()
+        self._close_session_csv()
 
     def _set_source_state(self, running: bool):
         """状态只在**变化**时才发信号，避免开始→停止连着来时界面闪一下。"""
@@ -285,6 +340,8 @@ class AppController(QObject):
         if src is not self.current_source:
             return                  # 已被替换或已手动停止的旧源，忽略
         self.current_source = None
+        # 自然跑完也要收尾：把本次运行的 CSV 关掉（否则下次「开始」才发现没关）
+        self._close_session_csv()
         self.source_finished.emit()
         self._set_source_state(False)
 
@@ -323,12 +380,15 @@ class AppController(QObject):
         # 1) UI 更新
         self.result_ready.emit(res)
 
-        # 2) CSV
+        # 2) CSV —— 写两份：全局总账（追加，跨运行积累）+ 本次运行的会话表
         if self.config["app"].get("save_csv", True):
-            try:
-                self.csv.write(res)
-            except Exception as e:
-                print("csv write error:", e)
+            for logger in (self.csv, self._session_csv):
+                if logger is None:
+                    continue
+                try:
+                    logger.write(res)
+                except Exception as e:
+                    print("csv write error:", e)
 
         # 3) 相机模式：原图 + 带框结果图各存一份到本次会话的时间戳目录
         #    `res.frame` 是整帧原因，所以这里能同时还原出「原图」和「结果图」。
@@ -366,6 +426,7 @@ class AppController(QObject):
     def shutdown(self):
         self.stop_source()
         self._stop_preview()
+        self._close_session_csv()
         self.capture_store = None
         self.infer_worker.stop()
         self.serial.close()
