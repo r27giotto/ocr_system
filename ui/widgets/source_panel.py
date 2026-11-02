@@ -2,7 +2,8 @@
 """输入源面板：文件夹 / 单图 / 摄像头（Basler 硬件触发）。"""
 from PyQt6.QtWidgets import (
     QGroupBox, QRadioButton, QLineEdit, QPushButton, QComboBox,
-    QSpinBox, QCheckBox, QFileDialog, QHBoxLayout, QVBoxLayout, QLabel
+    QSpinBox, QCheckBox, QFileDialog, QHBoxLayout, QVBoxLayout, QLabel,
+    QWidget
 )
 from PyQt6.QtCore import pyqtSignal
 
@@ -96,6 +97,10 @@ class SourcePanel(QGroupBox):
         self.btn_stop.clicked.connect(self.stop_requested.emit)
 
         # ---- 布局 ----
+        # ★ 每个可选行都套一个 QWidget 容器：整行（含「间隔:」「摄像头:」「FPS:」
+        #   这些**标签**）一起显示/隐藏。只藏输入控件会留下孤儿标签 —— 这就是
+        #   文件夹模式下看到「摄像头：FPS：保存：」那几行的原因。
+        #   隐藏的 QWidget 在布局里不占任何高度，所以那几行会彻底消失。
         type_row = QHBoxLayout()
         type_row.addWidget(self.rb_folder)
         type_row.addWidget(self.rb_single)
@@ -105,14 +110,14 @@ class SourcePanel(QGroupBox):
         path_row = QHBoxLayout()
         path_row.addWidget(self.path_edit, 1)
         path_row.addWidget(self.btn_browse)
-        self._path_widgets = [self.path_edit, self.btn_browse]
+        self._row_path = self._wrap_row(path_row)
 
         folder_row = QHBoxLayout()
         folder_row.addWidget(QLabel("间隔:"))
         folder_row.addWidget(self.interval_spin)
         folder_row.addWidget(self.loop_check)
         folder_row.addStretch()
-        self._folder_widgets = [self.interval_spin, self.loop_check]
+        self._row_folder = self._wrap_row(folder_row)
 
         cam_row = QHBoxLayout()
         cam_row.addWidget(QLabel("摄像头:"))
@@ -121,7 +126,7 @@ class SourcePanel(QGroupBox):
         cam_row.addWidget(self.fps_spin)
         cam_row.addWidget(self.btn_test)
         cam_row.addStretch()
-        self._cam_widgets = [self.cam_combo, self.fps_spin, self.btn_test]
+        self._row_cam = self._wrap_row(cam_row)
 
         save_row = QHBoxLayout()
         save_row.addWidget(QLabel("保存:"))
@@ -129,8 +134,7 @@ class SourcePanel(QGroupBox):
         save_row.addWidget(self.btn_raw_hist)
         save_row.addWidget(self.btn_result_hist)
         save_row.addStretch()
-        self._save_widgets = [self.spin_max_saved, self.btn_raw_hist,
-                              self.btn_result_hist]
+        self._row_save = self._wrap_row(save_row)
 
         btn_row = QHBoxLayout()
         btn_row.addWidget(self.btn_start)
@@ -139,10 +143,10 @@ class SourcePanel(QGroupBox):
 
         v = QVBoxLayout(self)
         v.addLayout(type_row)
-        v.addLayout(path_row)
-        v.addLayout(folder_row)
-        v.addLayout(cam_row)
-        v.addLayout(save_row)
+        v.addWidget(self._row_path)
+        v.addWidget(self._row_folder)
+        v.addWidget(self._row_cam)
+        v.addWidget(self._row_save)
         v.addWidget(self.lbl_cam_status)
         v.addLayout(btn_row)
 
@@ -150,18 +154,22 @@ class SourcePanel(QGroupBox):
             rb.toggled.connect(self._update_mode_visibility)
         self._update_mode_visibility()
 
+    @staticmethod
+    def _wrap_row(layout) -> QWidget:
+        """把一行 QHBoxLayout 包成一个可整体隐藏的 QWidget。"""
+        box = QWidget()
+        box.setLayout(layout)
+        layout.setContentsMargins(0, 0, 0, 0)
+        return box
+
     # ---- 模式联动 ---------------------------------------------------------
     def _update_mode_visibility(self, *_):
         is_camera = self.rb_camera.isChecked()
         is_folder = self.rb_folder.isChecked()
-        for w in self._path_widgets:
-            w.setVisible(not is_camera)
-        for w in self._folder_widgets:
-            w.setVisible(is_folder)
-        for w in self._cam_widgets:
-            w.setVisible(is_camera)
-        for w in self._save_widgets:
-            w.setVisible(is_camera)
+        self._row_path.setVisible(not is_camera)   # 相机模式没有路径可填
+        self._row_folder.setVisible(is_folder)     # 间隔/循环只属于文件夹模式
+        self._row_cam.setVisible(is_camera)        # 相机号/FPS/测试
+        self._row_save.setVisible(is_camera)       # 保存张数/两个历史目录
         self.lbl_cam_status.setVisible(is_camera)
 
     def set_camera_status(self, text: str):

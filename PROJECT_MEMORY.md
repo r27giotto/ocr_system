@@ -693,6 +693,12 @@ pending     = frames_in - results_out   ← 正常恒为 0；界面状态栏显�
 `trigger` 模式、建会话目录、原图与结果图**同名同数量**（实测 8 对）、真出识别结果；
 停止后 `current_source` 归 None；点「保存张数」写回临时配置且**不动真配置**；超上限被裁。
 
+**⚠️ 布局教训（m04783 修过一次的 bug）**：`SourcePanel` 的每个可选行（路径 / 间隔 /
+摄像头 / 保存）都套了 `QWidget` 容器，`_update_mode_visibility()` 藏的是**整行容器**。
+之前只藏输入控件、不藏「间隔:」「摄像头:」「FPS:」「保存:」这些 `QLabel`，结果文件夹模式
+下屏幕上留着「摄像头：FPS：保存：」三行孤儿标签。**以后往这几行加东西，直接加进对应行的
+layout 即可，不要单独 setVisible。** 三种模式下面板高度实测：文件夹 143 / 单图 114 / 摄像头 162 px。
+
 ### 6.6 ★ CSV 记录：全局总账（追加）+ 每次运行一份（m04619）
 
 **两份 CSV，同时写**（`app/controller.py:_on_result` 的步骤 2）：
@@ -1096,3 +1102,4 @@ git add -A ; git commit -m "说明"
 | m01023 | 用户装好 git 后：「创建git本地仓库并提交」→ **仓库建立**：git 2.56.0 在 `D:\Git\cmd\git.exe`（机器级 PATH 已含，但运行中的 shell 需刷新 PATH 才看得见）；`git init` + 分支改 `main`；仓库级身份 `ocr_system <ocr_system@localhost>`（全局为空，没动）；`.gitignore` 挡住 `.venv/`（4.6 GB）、`models/`（477 MB）、`logs/*.log|*.csv`、`__pycache__`、`_*` 探针文件；`.gitattributes` 统一 `eol=lf` 并把图片/权重标成 binary。首个提交 **`72a89fa`**：45 文件 / 7,504 行（含 `ocr.ico`、`OCR系统.lnk`、`uv.lock`、`test_engine_ready.py`），工作区干净。**无远程**，所以只能本地提交 |
 | m04085–m04303 | 用户提出 Basler 相机模式（acA1300-60gm，黑白，硬件触发 5fps，NPN 电眼，网线直连），并且**明确要求先讨论、后改代码**。设计文档升到 v2.1 新增 §16（相机选型/预览与采图两种打开模式/硬触发接线/测试摄像头门禁/落盘与会话目录/滚动上限/启动顺序）。获批后实现：新增 infra/basler_camera.py / infra/capture_store.py / infra/config_writer.py / core/render.py，pp/workers.py 加 CameraWorker，pp/controller.py 加 camera_tested 门禁与 capture_store，ui/widgets/source_panel.py 加「测试摄像头 / 保存张数 / 原图历史 / 识别历史」，ui/main_window.py 接预览与目录打开，config.yaml 加 history / camera / storage 三段。pypylon 26.9 已 uv 装好（纯 wheel，不依赖 Pylon SDK）。验收 35 项全过（假相机）。**⚠️ 没有硬件，全部未经真机验证** |
 | m04619 | 用户："第 1 步照做，第 2 步改成追加保留，同时文件/单图模式会在选择的文件或目录下生成csv" → `infra/csv_logger.py` 的 `CsvLogger(path, mode="a")` 默认**追加**，表头只在新建/清空时写一次（修掉缺陷 ①「每次启动清空 results.csv」）；`app/controller.py` 新增 `_session_csv_target` / `_open_session_csv` / `_close_session_csv`，每次「开始」多开一份**本次运行**的 CSV：摄像头在 `<识别历史>/<时间戳>/results.csv`、文件夹在 `<所选文件夹>/results_<时间戳>.csv`、单图在 `<图片目录>/results_<时间戳>.csv`；`_on_result` 改成**双写**；新增 `notice` 信号只进状态栏；`ui/main_window.py` 接 `notice`。验收 25 项全过 |
+| m04783 | 用户（配三张截图）："修复bug：选择文件夹模式不要显示 摄像头：FPS：保存：，单图模式不要显示 间隔： 摄像头：FPS： 保存：" → 根因：`ui/widgets/source_panel.py` 的 `_update_mode_visibility()` 只 `setVisible` 了**输入控件**，没管同行的 `QLabel("间隔:")` / `QLabel("摄像头:")` / `QLabel("FPS:")` / `QLabel("保存:")`，控件一藏标签就成了孤儿文字。→ 改法：每行套一个 `QWidget` 容器（`_wrap_row()`），整行一起显示/隐藏，隐藏的行在布局里不占高度。验收 27 项全过（`_verify_modes.py`，已删）：三种模式下该出现的标签/控件在、不该出现的不在；面板高度 文件夹 143 / 单图 114 / 摄像头 162 px |
