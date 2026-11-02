@@ -947,7 +947,7 @@ AppController + MainWindow(真配置)        构造成功，标题 "OCR 识别�
 | **A9** | `pyproject.toml` | **`paddlepaddle` 与 `pypylon` 都不在依赖里，但 venv 里两个都装着** → `uv sync` 会把它们一起卸掉（卸完 `import paddle` 失败、相机模式也起不来）。`paddlepaddle` 是**故意**的（CPU/GPU 两个包名两个源）；`pypylon` 属漏登记 | 已知取舍；`requirements.txt` 与设计文档 §15 已写明。补 `pypylon` 只需加一行 `"pypylon>=26.9"` |
 | **A10** | 设计文档 §16 | builder-check 的 **Q3**（运行中相机掉线怎么处置）、**Q4**（硬件在哪）仍未答 | 等用户裁 |
 | **A11** | `app/controller.py` `_on_result` | 在 **GUI 线程**做叠层绘制 + 2 份 CSV + 2 张 PNG 编码落盘 + 串口写；单张 PNG 约 10–30ms，节拍快时会卡界面 | 落盘挪到工作线程 / 或降采样后再编码 |
-| **A12** | 全项目 | **绝大多数验收都是临时 `_verify_*.py`、跑完即删**；常驻回归只有 `test/test_source_state.py`（6 组）与 `test/test_engine_ready.py`（6 组）。**这两套在 2026-11-02 审计里同时变红**（见已修第 8、9 条），说明「跑一次就删」的验收留不下防线 | 把 §7.4 里那些 `_verify_*.py` 的断言固化成常驻用例 |
+| **A12** | 全项目 | **绝大多数验收都是临时 `_verify_*.py`、跑完即删**；常驻回归只有 `test/test_source_state.py`（6 组）与 `test/test_engine_ready.py`（6 组）（2026-11-02 又加 `test/test_camera_mode.py`，11 项断言覆盖相机全流程 + 逐帧速度）。**这两套在 2026-11-02 审计里同时变红**（见已修第 8、9 条），说明「跑一次就删」的验收留不下防线 | 把 §7.4 里那些 `_verify_*.py` 的断言固化成常驻用例 |
 
 ---
 
@@ -1131,7 +1131,8 @@ self._load_worker.done.connect(self.engine_status.emit)
 11. 第 7 节剩下的待修缺陷：①CSV 截断、③有效范围重复定义、⑦整帧常驻内存、
    ⑧`decide` 的 status 参数（**②双重 shutdown 已于 2026-11-02 修掉**，见 §7.4）
 12. **A12：把验收脚本固化成常驻测试** —— 现在全是临时 `_verify_*.py`、跑完即删，
-   唯一的常驻回归只有 `test/test_source_state.py` 与 `test/test_engine_ready.py`
+   唯一的常驻回归只有 `test/test_source_state.py`、`test/test_engine_ready.py`
+   与 `test/test_camera_mode.py`（相机全流程 + 逐帧速度，2026-11-02 新增）
 13. GUI 全流程点一遍（除「加载模型」「开始/停止」外的按钮都没点过）
 14. 双击桌面 `OCR 识别系统.lnk` 确认真机界面能起来 —— 沙箱里已验证等价启动路径（`cmd /c start pythonw main.py` 存活 45 s、`logs/crash.log` 为空、模型加载 + 界面构造正常），但沙箱内无法确认窗口真画在屏幕上
 
@@ -1154,11 +1155,16 @@ $env:PYTHONPATH = 'E:\Python Project\ocr_system'
 Set-Location 'E:\Python Project\ocr_system'
 & $py main.py
 
-# 两套常驻回归（都离屏、不加载真模型，几秒跑完；EXIT=0 即通过）
+# 三套常驻回归（都离屏、不加载真模型，几秒跑完；EXIT=0 即通过）
 $env:QT_QPA_PLATFORM  = 'offscreen'
 $env:PYTHONIOENCODING = 'utf-8'   # 否则中文断言消息在 GBK 控制台是乱码（不影响结果）
 & $py -u test\test_source_state.py   # 开始/停止/再开始的按钮状态（m00002）
 & $py -u test\test_engine_ready.py   # 未加载/加载中/加载失败不许开跑（m00804）
+
+# 相机模式全流程（★ 会加载真模型，约 5 秒；无相机也能跑，用假相机模拟电眼触发）
+& $py -u test\test_camera_mode.py            # 6 帧、间隔 80ms
+& $py -u test\test_camera_mode.py -n 12 -i 300
+& $py -u test\test_camera_mode.py --backlog 1   # 反例对照：会故意失败（丢件数 > 0）
 
 # 装包（uv 在 D:\Python312，不在 E:\Python313；沙箱下先设可写的 UV_CACHE_DIR）
 & 'D:\Python312\Scripts\uv.exe' pip install <包名> --python $py
@@ -1256,3 +1262,4 @@ git add -A ; git commit -m "说明"
 | m05331 | 用户：「我需要启动时默认摄像头模式」→ `config.yaml` 的 `source.type: "camera"`（这个改动其实是用户 11:56 自己改的，随 `612c81c` 一并入库）；`SourcePanel` 启动即选中「摄像头」，显示「摄像头序号 / FPS / 测试摄像头」+「保存张数 / 原图历史 / 识别历史」+ 状态行 `未连接相机`，而路径框 / 间隔 / 循环**隐藏**。其余 `source.*` 键都可以省略（省略时走默认值 15 / 300 / false）。点「开始」仍被控制器两道闸拦住：先 `models_ready`，再 `camera_tested`（`app/controller.py:start_source`），所以启动态点开始会弹「模型未加载」或「请先点测试摄像头」|
 | m05411 | 用户：「帮我看一下还有什么要解决的问题或隐患，然后更新设计文档和记忆」→ **全量源码审计**（不只靠记忆）。修掉 7 项：`.gitignore` 补 3 条（`logs/*.bak-*.csv` / `logs/captures_raw/` / `logs/captures_result/`）、删死代码 `CameraSource`（+`threading`/`QThread` 导入）、`shutdown()` 等加载线程 `wait(60000)`、`InferenceWorker.stop` 超时 2000→30000、**停止时在飞帧不再丢记录**（`_close_csv_after_flight` + `_maybe_close_session_csv()`）、`closeEvent` 不再调 `shutdown()`（缺陷②关闭）、`requirements.txt` 从 0 字节改为说明文件。记下 **A1–A12** 12 条待处理隐患，详见 §7.4 |
 | m05837 | 用户说明生产节拍语义：「电眼检测到一个零件就发一次信号，摄像头拍一次照，可以确保摄像头内只有一个零件……每一帧就代表一个工件」→ 查证 **A3 是真丢件**：`CameraWorker._loop_capture` 取一张就 `_ack.wait(30.0)` 等推理完，期间电眼再触发时 `LatestImageOnly` **静默覆盖**中间帧。改为取图与推理解耦（emit 后立刻取下一张，FIFO 队列消费）+ `camera.max_backlog: 60` 硬背压。实测：假相机（单槽位覆盖）12 次触发 @30ms、每帧 100ms ⇒ **新 12/12（1.34s），旧等价配置 5/12（丢 indices 0,3,6,10,11）**。同时量出角度→耗时：8 角度 228ms / 24 角度 691ms / 72 角度 2024ms（约 28ms 每角度），即 8 角度上限 4.4 件/秒 |
+| m05970 | 用户：「在 test 目录下创建一个 test_camera_mode.py …… 测试全流程，从相机到推理到输出，然后能够打印每张图片的处理速度」→ 新增 **`test/test_camera_mode.py`**（约 430 行，**常驻**，与另外两套一起跑）：真 `AppController` + 真模型 + 真 CSV + 真落盘，只把 `BaslerCamera` 换成 `FakeBaslerCamera`（**如实模拟 `LatestImageOnly` 单槽位覆盖**）、`SerialService` 换成 `FakeSerial`（记录发出的 `'1'/'0'`）。落盘目录改到 `logs/_camera_test/`（已进 `.gitignore`），绝不碰真实历史；`max_saved_images=9999` 防滚动删。输出逐帧表（数字/判定/置信度/角度/状态/**推理ms**/**触发→结果ms**）+ 汇总（平均/最小/最大、端到端吞吐、峰值积压）+ 11 项断言（无 source_error / frames_in / results / 覆盖数=0 / 串口字节数 / 峰值积压≤max_backlog / 原图与结果图各 N 张 / 会话 CSV N+1 行 / 全局 CSV N+1 行）。实测 6 帧 @80ms：推理均值 242ms（首帧 337ms 冷启动）、端到端吞吐 4.13 帧/秒、峰值积压 5、覆盖 0，EXIT=0。**反例对照 `--backlog 1` 复现旧架构：6 次触发只取到 3 帧、相机内覆盖 3、EXIT=1** —— 证明这个脚本真能抓住解耦回归 |
