@@ -1,13 +1,14 @@
 import cv2
 import numpy as np
 from PyQt6.QtWidgets import (
-    QGroupBox, QScrollArea, QWidget, QHBoxLayout, QVBoxLayout,
+    QScrollArea, QWidget, QHBoxLayout, QVBoxLayout,
     QLabel, QSizePolicy, QPushButton
 )
 from PyQt6.QtGui import QImage, QPixmap
 from PyQt6.QtCore import Qt, pyqtSignal, QTimer
 
 from ui.overlay import draw_overlay
+from ui.widgets.collapsible import CollapsibleGroupBox
 from core.models import RecognitionResult
 
 
@@ -101,7 +102,7 @@ class HistoryItem(QWidget):
         self.clicked.emit(self.res)
 
 
-class HistoryPanel(QGroupBox):
+class HistoryPanel(CollapsibleGroupBox):
     item_clicked = pyqtSignal(object)
     cleared = pyqtSignal()
 
@@ -147,8 +148,8 @@ class HistoryPanel(QGroupBox):
         self.layout.setContentsMargins(4, 4, 4, 4)
         self.scroll.setWidget(self.container)
 
-        v = QVBoxLayout(self)
-        v.setContentsMargins(6, 6, 6, 6)
+        v = self.body_layout()
+        v.setContentsMargins(0, 0, 0, 0)
         v.setSpacing(4)
         v.addLayout(head)
         v.addWidget(self.scroll, 1)

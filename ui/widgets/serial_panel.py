@@ -1,11 +1,13 @@
 from PyQt6.QtWidgets import (
-    QGroupBox, QComboBox, QPushButton, QLabel,
+    QComboBox, QPushButton, QLabel,
     QHBoxLayout, QVBoxLayout, QFormLayout
 )
 from PyQt6.QtCore import pyqtSignal
 
+from ui.widgets.collapsible import CollapsibleGroupBox
 
-class SerialPanel(QGroupBox):
+
+class SerialPanel(CollapsibleGroupBox):
     open_requested = pyqtSignal(str, int)
     close_requested = pyqtSignal()
     refresh_requested = pyqtSignal()
@@ -62,7 +64,7 @@ class SerialPanel(QGroupBox):
         stat_row.addWidget(self.error_label)
         stat_row.addStretch()
 
-        v = QVBoxLayout(self)
+        v = self.body_layout()
         v.addLayout(form)
         v.addLayout(btn_row)
         v.addWidget(self.status_label)

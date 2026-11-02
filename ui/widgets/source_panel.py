@@ -1,14 +1,16 @@
 # -*- coding: utf-8 -*-
 """输入源面板：文件夹 / 单图 / 摄像头（Basler 硬件触发）。"""
 from PyQt6.QtWidgets import (
-    QGroupBox, QRadioButton, QLineEdit, QPushButton, QComboBox,
+    QRadioButton, QLineEdit, QPushButton, QComboBox,
     QSpinBox, QCheckBox, QFileDialog, QHBoxLayout, QVBoxLayout, QLabel,
     QWidget
 )
 from PyQt6.QtCore import pyqtSignal
 
+from ui.widgets.collapsible import CollapsibleGroupBox
 
-class SourcePanel(QGroupBox):
+
+class SourcePanel(CollapsibleGroupBox):
     start_requested = pyqtSignal(dict)
     stop_requested = pyqtSignal()
     test_requested = pyqtSignal()            # 「测试摄像头」
@@ -143,7 +145,7 @@ class SourcePanel(QGroupBox):
         btn_row.addWidget(self.btn_stop)
         btn_row.addStretch()
 
-        v = QVBoxLayout(self)
+        v = self.body_layout()
         v.addLayout(type_row)
         v.addWidget(self._row_path)
         v.addWidget(self._row_folder)

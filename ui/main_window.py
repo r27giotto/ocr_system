@@ -105,6 +105,18 @@ class MainWindow(QMainWindow):
         self._stats = {"total": 0, "hit": 0, "sum_ms": 0.0}
         self._update_status()
 
+        # ---- 窗口最小高度 ----
+        # 「不被压缩」的基准是图像显示区的最小尺寸（上面 image_view 的 640×480）。
+        # 折叠面板只应该把垂直空间**让出来**，不该让窗口跟着缩到显示区被压扁；
+        # 所以下限按「图像区最小 + 历史区最小 + 状态栏 + 分隔条」算，
+        # 与面板折叠/展开无关。改这几个量前先想清楚——它决定窗口能缩到多小。
+        self.setMinimumHeight(
+            self.image_view.minimumHeight()
+            + self.history_panel.minimumSizeHint().height()
+            + self.status_bar.sizeHint().height()
+            + 16
+        )
+
         # ---- 信号连接 ----
         self._connect_signals()
 
@@ -150,6 +162,10 @@ class MainWindow(QMainWindow):
         # 非阻断提示（本次运行的 CSV 落在哪 / 写失败）只写状态栏
         self.controller.notice.connect(
             lambda msg: self.status_bar.showMessage(msg, 8000))
+
+        # 历史区在竖直分割器里，折叠不会自己变矮（分割器给的是固定份额），
+        # 所以折叠 / 展开时手动把高度让出去 / 还回来。
+        self.history_panel.collapsed_changed.connect(self._on_history_collapsed)
 
         # 历史项点击 → 主图区回看
         self.history_panel.item_clicked.connect(self._on_history_clicked)
@@ -232,6 +248,24 @@ class MainWindow(QMainWindow):
 
     def _on_history_clicked(self, res):
         self.image_view.set_result(res, keep_frame=True)
+
+    def _on_history_collapsed(self, collapsed: bool):
+        """历史区折叠时把竖直分割器里的高度让给上图区。
+
+        它在 `QSplitter` 里，单纯隐藏正文并不会让它变矮（分割器按份额分配），
+        所以要显式改份额；同时用 `setMaximumHeight` 钉住折叠态，免得用户拖动
+        分隔条时把一条只有标题的空面板拉高。
+        """
+        total = max(1, sum(self.v_splitter.sizes()))
+        title_h = max(24, self.history_panel.lbl_title.height() + 24)
+        if collapsed:
+            self._history_h = max(title_h + 40, self.history_panel.height())
+            self.history_panel.setMaximumHeight(title_h)
+            self.v_splitter.setSizes([total - title_h, title_h])
+        else:
+            self.history_panel.setMaximumHeight(16777215)
+            h = max(title_h + 40, getattr(self, "_history_h", 230))
+            self.v_splitter.setSizes([total - h, h])
 
     def _on_history_cleared(self):
         """清除历史时，把状态栏的累计统计一起归零（否则空历史配着

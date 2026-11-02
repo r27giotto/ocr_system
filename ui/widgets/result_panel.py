@@ -1,10 +1,11 @@
-from PyQt6.QtWidgets import QGroupBox, QLabel, QVBoxLayout, QHBoxLayout
+from PyQt6.QtWidgets import QLabel, QVBoxLayout, QHBoxLayout
 from PyQt6.QtCore import Qt
 
 from core.models import RecognitionResult
+from ui.widgets.collapsible import CollapsibleGroupBox
 
 
-class ResultPanel(QGroupBox):
+class ResultPanel(CollapsibleGroupBox):
     # 判定的显示配色：G=良品(绿) / NG=不良(红) / ?=无法判定(橙) / --=还没跑过(灰)
     _STYLES = {
         "G":  "#2ecc71",
@@ -44,7 +45,7 @@ class ResultPanel(QGroupBox):
         number_row.addWidget(self.number_label)
         number_row.addStretch()
 
-        v = QVBoxLayout(self)
+        v = self.body_layout()
         v.addLayout(number_row)
         v.addLayout(value_row)
         v.addWidget(self.conf_label)

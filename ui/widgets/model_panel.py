@@ -1,10 +1,12 @@
 from PyQt6.QtWidgets import (
-    QGroupBox, QComboBox, QPushButton, QLabel, QFormLayout, QHBoxLayout, QVBoxLayout
+    QComboBox, QPushButton, QLabel, QFormLayout, QHBoxLayout, QVBoxLayout
 )
 from PyQt6.QtCore import pyqtSignal
 
+from ui.widgets.collapsible import CollapsibleGroupBox
 
-class ModelPanel(QGroupBox):
+
+class ModelPanel(CollapsibleGroupBox):
     load_requested = pyqtSignal(str, str)   # (rec_name, ori_name)
 
     def __init__(self, rec_options, ori_options, default_rec, default_ori):
@@ -37,7 +39,7 @@ class ModelPanel(QGroupBox):
         bottom.addWidget(self.status_label)
         bottom.addStretch()
 
-        v = QVBoxLayout(self)
+        v = self.body_layout()
         v.addLayout(form)
         v.addLayout(bottom)
 

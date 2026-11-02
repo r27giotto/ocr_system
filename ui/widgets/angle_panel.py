@@ -1,11 +1,13 @@
 from PyQt6.QtWidgets import (
-    QGroupBox, QCheckBox, QComboBox, QPushButton, QGridLayout, QHBoxLayout,
+    QCheckBox, QComboBox, QPushButton, QGridLayout, QHBoxLayout,
     QVBoxLayout, QLabel
 )
 from PyQt6.QtCore import pyqtSignal
 
+from ui.widgets.collapsible import CollapsibleGroupBox
 
-class AnglePanel(QGroupBox):
+
+class AnglePanel(CollapsibleGroupBox):
     """角度选择。
 
     角度分成两组：
@@ -147,8 +149,8 @@ class AnglePanel(QGroupBox):
         self._step = self.DEFAULT_STEP
         self._rebuild_grid(self.DEFAULT_STEP, keep=set(rot))
 
-        v = QVBoxLayout(self)
-        v.setContentsMargins(8, 6, 8, 6)
+        v = self.body_layout()
+        v.setContentsMargins(0, 0, 0, 0)
         v.setSpacing(4)
         v.addLayout(fixed_row)
         v.addLayout(step_row)

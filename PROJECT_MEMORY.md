@@ -498,18 +498,19 @@ demo 用的样张目录：E:\Python Project\project_0\data\test3   （11 张图�
 | `infra/csv_logger.py` | 56 | CSV 记录；**默认 `mode="a"` 追加**（表头只在新建/清空时写一次），会话表用 `mode="w"`。见 §6.6 | ✅ 已实测（§6.6） |
 | `app/controller.py` | 433 | `AppController`（编排层）；**每帧必发一个串口字节**，`frames_in`/`results_out` 对账；**`source_state` 是输入源运行状态的唯一真源**（只在变化时发，m00002）；**`models_ready`/`_loading` 是模型就绪状态的唯一真源**（未加载/加载中拒开跑、运行中拒绝加载，m00804）；**摄像头模式**：`test_camera()` / `camera_tested` 门禁 / `capture_store` 生命周期（§6.5）；**CSV 双写**：全局总账 + 本次运行的会话表（§6.6） | ✅ 已实测（见 §6.4、§6.5、§6.6、§7.3） |
 | `app/workers.py` | 190 | `EngineLoadWorker` / `InferenceWorker`；**队列不丢帧**，`frame_processed` 做背压；**`CameraWorker`**（预览 `mode="free"` / 采图 `mode="trigger"`，`_ack.wait(30)` 背压，超时发 `warn`） | ✅ 已实测（见 §6.4、§6.5） |
-| `ui/main_window.py` | 258 | 主窗口，组装七个面板；竖直 `QSplitter` 分隔历史区，右列包 `QScrollArea`；状态栏显示 `→ G/NG` 与 `待处理 N`；`source_state → set_running`、`source_error → 状态栏`（摄像头模式额外弹窗）、`engine_busy → source_panel.set_engine_busy`；**相机**：`preview_ready → image_view`、`open_dir_requested → _on_open_dir`（`QDesktopServices` 打开目录）、`max_saved_changed → _on_max_saved_changed`（写回 config.yaml） | ✅ 已实测（见 §6.1 / §6.3 / §6.4 / §6.5 / §7.3） |
+| `ui/main_window.py` | 295 | 主窗口，组装七个面板（**六个可折叠**，§6.7）；竖直 `QSplitter` 分隔历史区，右列包 `QScrollArea`；**`setMinimumHeight` 按「图像区 480 + 历史区 123 + 状态栏 22 + 16」保证显示区不被压扁**；状态栏显示 `→ G/NG` 与 `待处理 N`；`source_state → set_running`、`source_error → 状态栏`（摄像头模式额外弹窗）、`engine_busy → source_panel.set_engine_busy`；**相机**：`preview_ready → image_view`、`open_dir_requested → _on_open_dir`（`QDesktopServices` 打开目录）、`max_saved_changed → _on_max_saved_changed`（写回 config.yaml）；`history_panel.collapsed_changed → _on_history_collapsed` | ✅ 已实测（见 §6.1 / §6.3 / §6.4 / §6.5 / §6.7 / §7.3） |
 | `ui/overlay.py` | 8 | 只是 `from core.render import draw_overlay` 的 re-export（画框逻辑已迁到 `core/render.py`） | ✅ 已实测 |
-| `ui/widgets/angle_panel.py` | 263 | 固定角度 0°/180° 单独一行（不受负号影响）+ 旋转角度网格（**步长下拉框 5/10/15/20/30**，默认 5° 共 35 格）+「负号」开关 + 全选/仅 0°/反选/默认 | ✅ 已实测 |
-| `ui/widgets/history_panel.py` | 187 | 历史缩略图，**固定 120×120** + 高度可一直往下拖（最小 113px）+ 横/竖滚轴按需 + 清除按钮；卡片显示 `数字 → G/NG/?`，边框色同 §6.3 | ✅ 已实测（见 §6.2 / §6.3） |
-| `ui/widgets/result_panel.py` | 74 | 结果显示；**「识别数字:」与数字同一行**（m04872，`QHBoxLayout`：标签 + 数字 + 末尾 stretch，数字左对齐垂直居中、22px 粗体）；**大方框显示 `G`/`NG`/`?`**（底色绿/红/橙），tooltip 给出原始 `output_value` | ✅ 已实测（见 §6.3） |
+| `ui/widgets/angle_panel.py` | 265 | 固定角度 0°/180° 单独一行（不受负号影响）+ 旋转角度网格（**步长下拉框 5/10/15/20/30**，默认 5° 共 35 格）+「负号」开关 + 全选/仅 0°/反选/默认 | ✅ 已实测 |
+| `ui/widgets/collapsible.py` | 111 | **所有面板的基类** `CollapsibleGroupBox`：`setTitle("")` + 自绘粗体标题 `lbl_title` + 右侧 `btn_collapse`（▼ 展开 / ▶ 折叠）；`body_layout()` 返回正文布局，面板把子控件加进去；折叠只是 `body.setVisible(False)`，`QVBoxLayout` 自动把尺寸算成 0；`collapsed_changed(bool)` 只在状态真变时发一次；点标题也能折叠 | ✅ 已实测（§6.7） |
+| `ui/widgets/history_panel.py` | 189 | 历史缩略图，**固定 120×120** + 高度可一直往下拖（最小 113px）+ 横/竖滚轴按需 + 清除按钮；卡片显示 `数字 → G/NG/?`，边框色同 §6.3 | ✅ 已实测（见 §6.2 / §6.3） |
+| `ui/widgets/result_panel.py` | 75 | 结果显示；**「识别数字:」与数字同一行**（m04872，`QHBoxLayout`：标签 + 数字 + 末尾 stretch，数字左对齐垂直居中、22px 粗体）；**大方框显示 `G`/`NG`/`?`**（底色绿/红/橙），tooltip 给出原始 `output_value` | ✅ 已实测（见 §6.3） |
 | `ui/widgets/model_panel.py` | 102 | 识别模型下拉（`rec_options`）+ 方向模型下拉 + 加载按钮 + **状态标签**（加载中/已加载：名/失败原因/**切换未加载**提示，m00804） | ✅ 已实测（加载联动，见 §7.3） |
-| `ui/widgets/source_panel.py` | 234 | 输入源（**摄像头 / 文件夹 / 单图**，摄像头在最左，m05075）+ 路径 + 摄像头号/FPS/间隔/循环 + 开始/停止；`set_running()` / `set_engine_busy()` 改状态后统一走 `_apply_buttons()`（加载中禁用「开始」并给 tooltip，m00804）；**摄像头模式三增项**：`测试摄像头`（+`lbl_cam_status`）/ `保存张数:` + 纯数字微调框 / `原图历史`+`识别历史`，靠 `_update_mode_visibility()` 只在摄像头模式出现（§6.5） | ✅ 相机模式已用假相机实测（§6.5） |
+| `ui/widgets/source_panel.py` | 236 | 输入源（**摄像头 / 文件夹 / 单图**，摄像头在最左，m05075）+ 路径 + 摄像头号/FPS/间隔/循环 + 开始/停止；`set_running()` / `set_engine_busy()` 改状态后统一走 `_apply_buttons()`（加载中禁用「开始」并给 tooltip，m00804）；**摄像头模式三增项**：`测试摄像头`（+`lbl_cam_status`）/ `保存张数:` + 纯数字微调框 / `原图历史`+`识别历史`，靠 `_update_mode_visibility()` 只在摄像头模式出现（§6.5） | ✅ 相机模式已用假相机实测（§6.5） |
 | `infra/basler_camera.py` | 212 | `BaslerCamera`：`open(mode)`/`grab()`/`close()`；`pypylon` 延迟导入，没装时 `is_available()` 返回 False 并给安装提示 | ⚠️ 无硬件，未真机验证 |
 | `infra/capture_store.py` | 150 | `CaptureStore`：按时间戳建会话子目录，原图/结果图同名落盘，`prune()` 跨会话滚动裁剪 | ✅ 已实测（§6.5） |
 | `infra/config_writer.py` | 114 | `set_value(path, "a.b", v)`：只改 YAML 文本里那一行的值、保留注释、原子替换、回读校验；失败抛 `ConfigWriteError` | ✅ 已实测（30 项） |
 | `core/render.py` | 42 | `draw_overlay(img, res)`（从 `ui/overlay.py` 迁出，便于控制器在非 UI 线程画结果图） | ✅ 已实测 |
-| `ui/widgets/serial_panel.py` | 97 | 串口选择/连接/断开 + 「每帧必发」说明 | ⚠️ 仅 import 验证 |
+| `ui/widgets/serial_panel.py` | 99 | 串口选择/连接/断开 + 「每帧必发」说明 | ⚠️ 仅 import 验证 |
 | `ui/widgets/image_view.py` | 49 | 主图显示（`QLabel` + 等比例缩放） | ✅ 已实测 |
 
 `core/models.py` 的 `RecognitionResult` 字段（写代码时对齐这个）：
@@ -757,6 +758,57 @@ layout 即可，不要单独 setVisible。** 三种模式下面板高度实测�
 表头 / 覆盖模式只剩本次；全局总账预置一行「上一次运行」后仍在，跑完变成 3 行且表头
 只有一个；文件夹模式会话表落在所选目录、2 条、内容与全局表一致；单图模式落在图片目录、
 1 条；摄像头模式会话表就是 `<识别历史>/<时间戳>/results.csv`、PNG 张数与记录数一致。
+
+### 6.7 ★ 面板可折叠 + 窗口最小高度（m05115）
+
+**每个面板都能折起来。** `ui/widgets/collapsible.py` 的 `CollapsibleGroupBox` 是
+`ModelPanel` / `SourcePanel` / `AnglePanel` / `ResultPanel` / `SerialPanel` /
+`HistoryPanel` **六个类的共同基类**：
+
+- `QGroupBox` 自己的标题画在边框上、塞不进按钮，所以基类里 `setTitle("")`，改用
+  粗体 `QLabel`（`lbl_title`）+ 右侧 `QToolButton`（`btn_collapse`）自己排一行。
+- 子类把原来 `QVBoxLayout(self)` 换成 `self.body_layout()`，其余代码一行不动。
+- 折叠 = `self._body.setVisible(False)`。`QVBoxLayout` 会把隐藏子控件的尺寸算成 0，
+  面板自动缩到标题条，**不需要手工改 `minimumHeight`**。
+- 箭头用 **▼（展开）/ ▶（折叠）**，故意不用 ▾/▸ 这类小三角 —— 后者在部分字体里
+  是方框。点标题文字也能折叠（`lbl_title.mousePressEvent`）。
+- `collapsed_changed(bool)` 只在状态**真的变了**时发一次（重复 `set_collapsed(True)`
+  不会重复发）。
+
+实测折叠前后（1400×900 窗口）：
+
+| 面板 | 展开 | 折叠 |
+|---|---|---|
+| 模型选择 | 119px | 39px |
+| 输入源 | 162px | 39px |
+| 角度选择 | 260px | 39px |
+| 检测结果 | 205px | 39px |
+| 串口 | 173px | 39px |
+| 检测结果历史 | 231px | 42px |
+
+右列五个面板在 `QVBoxLayout` 里，折叠后自动让位给 `addStretch()`；
+**历史面板例外**——它在竖直 `QSplitter` 里，隐藏正文不会让它变矮（分割器按份额分配），
+所以 `MainWindow._on_history_collapsed` 显式改份额，并用 `setMaximumHeight` 钉住折叠态，
+免得用户拖动分隔条把一条只有标题的空面板拉高。
+
+**窗口最小高度**（`ui/main_window.py`，构造末尾）：
+
+```python
+self.setMinimumHeight(
+    self.image_view.minimumHeight()          # 480
+    + self.history_panel.minimumSizeHint().height()   # 123
+    + self.status_bar.sizeHint().height()    # 22
+    + 16)                                    # 实测 641
+```
+
+「不被压缩」的基准是图像显示区的 `setMinimumSize(640, 480)`。下限按**全展开**时算、
+与折叠状态无关 —— 折叠只应该把垂直空间**让出来**，不该让窗口跟着缩到显示区被压扁。
+实测把窗口缩到 641px 高时，图像区仍是 480px（正好等于它的最小高度）、历史区 135px。
+
+**验收**（`_verify_collapse.py`，临时已删，EXIT=0，44 项全过）：六个面板都是
+`CollapsibleGroupBox` 且按钮可见；折叠后都 ≤50px、标题仍在、箭头变 ▶；窗口尺寸不变、
+图像区不变小；展开后高度逐像素复原；点标题能折叠；信号只发一次；最小高度等于公式值；
+缩到最小后图像区 ≥480px、历史区 ≥123px。
 
 ---
 
@@ -1135,3 +1187,4 @@ git add -A ; git commit -m "说明"
 | m04963 | 用户：「我想记录的csv表头都是中文」→ `infra/csv_logger.py`：新增 `HEADERS`（时间戳/文件名/识别数字/置信度/角度/命中目标/判定值/状态/耗时(毫秒)）与 `_HEADER_OF` 映射，`DictWriter(fieldnames=HEADERS)`，`write()` 按中文键写；`FIELDS` 保持英文内部名不动。**老文件自动迁移**：打开时若首行 != `HEADERS`，先复制一份 `<名字>.bak-<时间戳>.csv`，再**原地**重写表头（数据行保留）——不用 `os.replace`，因为 `logs/results.csv` 常被运行中的实例占着、改名必然 `WinError 32`。验收 19 项全过（`_verify_csv_zh.py`，已删）：中文表头 / BOM / 追加不重复表头 / 旧英文表头自动迁移且数据不丢 / 表头已正确时不再备份 / 覆盖模式重写表头 / `FIELDS` 与 `HEADERS` 一一对应。真实 `logs/results.csv` 已迁移（33 条数据保留，备份 `results.bak-20261102-114710.csv`）|
 | m05032 | 用户：「时间戳改成时间精确到毫秒」→ `infra/csv_logger.py`：新增模块级 `format_time(ts)`（`datetime.fromtimestamp(...).strftime("%Y-%m-%d %H:%M:%S.%f")[:-3]`，非法值返回空串），`write()` 的 `timestamp` 改用它；表头「时间戳」→ **「时间」**；新增 `_LEGACY_HEADERS`（v2.1 英文 / v2.2「时间戳」+Unix 秒）与 `_to_time_text()`，迁移时把第 1 列的 Unix 秒**转成可读时间**（其余列照抄、认不出的表头不动）。验收 28 项全过（`_verify_csv_time.py`，已删）：格式 `2025-10-09 16:53:19.123` 毫秒精度 / 非法值空串 / 新文件与追加 / 旧中文表头迁移且 Unix 秒转成时间、备份保留原始值 / 旧英文表头同迁移 / 表头已对时不重复转换 / 陌生表头不改写 / 覆盖模式。真实 `logs/results.csv` 已迁移（33 条数据保留，首条 `2026-11-02 11:19:30.644`，备份 `results.bak-20261102-115024.csv`）|
 | m05075 | 用户（配输入源面板截图）：「把摄像头模式选项移到最左边」→ `ui/widgets/source_panel.py` 的 `type_row` 顺序改为 `rb_camera → rb_folder → rb_single`（原来是 文件夹/单图/摄像头）。默认选中仍是文件夹（由 `config.yaml` 的 `source.type` 决定，本次没动）。验收 10 项全过（`_verify_radio_order.py`，已删）：摄像头 x=14 / 文件夹 x=80 / 单图 x=146，三者同一行、文字不截断；切到摄像头后测试按钮与存图行照常出现、循环复选框照常隐藏 |
+| m05115 | 用户：「每个模块都添加一个折叠按钮，能够折叠面板，但要设定一个窗口最小高度能够保证显示区域不被压缩」→ 新增 `ui/widgets/collapsible.py`（`CollapsibleGroupBox`，**六个面板的共同基类**）：`setTitle("")` + 粗体标题 `QLabel` + 右侧 ▼/▶ 按钮；子类把 `QVBoxLayout(self)` 换成 `self.body_layout()`，其余一行不动；折叠 = `body.setVisible(False)`，`QVBoxLayout` 自动把尺寸算成 0；点标题也能折；`collapsed_changed(bool)` 只在状态真变时发。六个面板折叠后都缩到 39px（历史 42px）。**窗口最小高度** = 图像区 480 + 历史区 123 + 状态栏 22 + 16 = **641px**，按全展开算、与折叠状态无关 —— 折叠只让位，不让显示区被压扁。历史区在 `QSplitter` 里不会自动缩，`MainWindow._on_history_collapsed` 显式改份额 + `setMaximumHeight` 钉住 |
