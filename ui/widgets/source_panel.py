@@ -102,10 +102,11 @@ class SourcePanel(QGroupBox):
         #   这些**标签**）一起显示/隐藏。只藏输入控件会留下孤儿标签 —— 这就是
         #   文件夹模式下看到「摄像头：FPS：保存：」那几行的原因。
         #   隐藏的 QWidget 在布局里不占任何高度，所以那几行会彻底消失。
+        # 顺序（用户要求，m05075）：摄像头 → 文件夹 → 单图，摄像头在最左
         type_row = QHBoxLayout()
+        type_row.addWidget(self.rb_camera)
         type_row.addWidget(self.rb_folder)
         type_row.addWidget(self.rb_single)
-        type_row.addWidget(self.rb_camera)
         type_row.addStretch()
 
         path_row = QHBoxLayout()
