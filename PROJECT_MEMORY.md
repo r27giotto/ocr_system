@@ -504,7 +504,7 @@ demo 用的样张目录：E:\Python Project\project_0\data\test3   （11 张图�
 | `ui/widgets/history_panel.py` | 187 | 历史缩略图，**固定 120×120** + 高度可一直往下拖（最小 113px）+ 横/竖滚轴按需 + 清除按钮；卡片显示 `数字 → G/NG/?`，边框色同 §6.3 | ✅ 已实测（见 §6.2 / §6.3） |
 | `ui/widgets/result_panel.py` | 64 | 结果显示；**大方框显示 `G`/`NG`/`?`**（底色绿/红/橙），tooltip 给出原始 `output_value` | ✅ 已实测（见 §6.3） |
 | `ui/widgets/model_panel.py` | 102 | 识别模型下拉（`rec_options`）+ 方向模型下拉 + 加载按钮 + **状态标签**（加载中/已加载：名/失败原因/**切换未加载**提示，m00804） | ✅ 已实测（加载联动，见 §7.3） |
-| `ui/widgets/source_panel.py` | 224 | 输入源（文件夹/单图/摄像头）+ 路径 + 摄像头号/FPS/间隔/循环 + 开始/停止；`set_running()` / `set_engine_busy()` 改状态后统一走 `_apply_buttons()`（加载中禁用「开始」并给 tooltip，m00804）；**摄像头模式三增项**：`测试摄像头`（+`lbl_cam_status`）/ `保存:N 张` / `原图历史`+`识别历史`，靠 `_update_mode_visibility()` 只在摄像头模式出现（§6.5） | ✅ 相机模式 35 项已用假相机实测（§6.5） |
+| `ui/widgets/source_panel.py` | 232 | 输入源（文件夹/单图/摄像头）+ 路径 + 摄像头号/FPS/间隔/循环 + 开始/停止；`set_running()` / `set_engine_busy()` 改状态后统一走 `_apply_buttons()`（加载中禁用「开始」并给 tooltip，m00804）；**摄像头模式三增项**：`测试摄像头`（+`lbl_cam_status`）/ `保存张数:` + 纯数字微调框 / `原图历史`+`识别历史`，靠 `_update_mode_visibility()` 只在摄像头模式出现（§6.5） | ✅ 相机模式已用假相机实测（§6.5） |
 | `infra/basler_camera.py` | 212 | `BaslerCamera`：`open(mode)`/`grab()`/`close()`；`pypylon` 延迟导入，没装时 `is_available()` 返回 False 并给安装提示 | ⚠️ 无硬件，未真机验证 |
 | `infra/capture_store.py` | 150 | `CaptureStore`：按时间戳建会话子目录，原图/结果图同名落盘，`prune()` 跨会话滚动裁剪 | ✅ 已实测（§6.5） |
 | `infra/config_writer.py` | 114 | `set_value(path, "a.b", v)`：只改 YAML 文本里那一行的值、保留注释、原子替换、回读校验；失败抛 `ConfigWriteError` | ✅ 已实测（30 项） |
@@ -671,7 +671,7 @@ pending     = frames_in - results_out   ← 正常恒为 0；界面状态栏显�
 | `core/render.py` | `draw_overlay(img, res)`（从 `ui/overlay.py` 迁来，`ui/overlay.py` 只是 re-export） |
 | `app/workers.py` | 新增 `CameraWorker(QThread)`：`test_requested` 时 `mode="free"` 连续取图发 `preview`；`start_source` 时 `mode="trigger"`，收一条走一条，`_ack.wait(30)` 背压，超时发 `warn` |
 | `app/controller.py` | `preview_ready` / `camera_status` 信号；`test_camera()` / `_stop_preview()`；`camera_tested` 门禁；`capture_store` 生命周期 |
-| `ui/widgets/source_panel.py` | 三处增项：`测试摄像头`（+`lbl_cam_status`）、`保存:N 张` 微调框、`原图历史` / `识别历史` 两个按钮；`_update_mode_visibility()` 让它们**只在摄像头模式出现** |
+| `ui/widgets/source_panel.py` | 三处增项：`测试摄像头`（+`lbl_cam_status`）、`保存张数:` + 纯数字微调框（m04827：后缀「张」已去掉）、`原图历史` / `识别历史` 两个按钮；`_update_mode_visibility()` 让它们**只在摄像头模式出现** |
 | `ui/main_window.py` | `_on_preview` / `_on_open_dir` / `_on_max_saved_changed`；`_on_source_error` 在摄像头模式改弹窗 |
 
 **硬规则（用户明确要求，m04106）**：点「开始」前**必须先点过「测试摄像头」**，否则弹窗
@@ -1103,3 +1103,4 @@ git add -A ; git commit -m "说明"
 | m04085–m04303 | 用户提出 Basler 相机模式（acA1300-60gm，黑白，硬件触发 5fps，NPN 电眼，网线直连），并且**明确要求先讨论、后改代码**。设计文档升到 v2.1 新增 §16（相机选型/预览与采图两种打开模式/硬触发接线/测试摄像头门禁/落盘与会话目录/滚动上限/启动顺序）。获批后实现：新增 infra/basler_camera.py / infra/capture_store.py / infra/config_writer.py / core/render.py，pp/workers.py 加 CameraWorker，pp/controller.py 加 camera_tested 门禁与 capture_store，ui/widgets/source_panel.py 加「测试摄像头 / 保存张数 / 原图历史 / 识别历史」，ui/main_window.py 接预览与目录打开，config.yaml 加 history / camera / storage 三段。pypylon 26.9 已 uv 装好（纯 wheel，不依赖 Pylon SDK）。验收 35 项全过（假相机）。**⚠️ 没有硬件，全部未经真机验证** |
 | m04619 | 用户："第 1 步照做，第 2 步改成追加保留，同时文件/单图模式会在选择的文件或目录下生成csv" → `infra/csv_logger.py` 的 `CsvLogger(path, mode="a")` 默认**追加**，表头只在新建/清空时写一次（修掉缺陷 ①「每次启动清空 results.csv」）；`app/controller.py` 新增 `_session_csv_target` / `_open_session_csv` / `_close_session_csv`，每次「开始」多开一份**本次运行**的 CSV：摄像头在 `<识别历史>/<时间戳>/results.csv`、文件夹在 `<所选文件夹>/results_<时间戳>.csv`、单图在 `<图片目录>/results_<时间戳>.csv`；`_on_result` 改成**双写**；新增 `notice` 信号只进状态栏；`ui/main_window.py` 接 `notice`。验收 25 项全过 |
 | m04783 | 用户（配三张截图）："修复bug：选择文件夹模式不要显示 摄像头：FPS：保存：，单图模式不要显示 间隔： 摄像头：FPS： 保存：" → 根因：`ui/widgets/source_panel.py` 的 `_update_mode_visibility()` 只 `setVisible` 了**输入控件**，没管同行的 `QLabel("间隔:")` / `QLabel("摄像头:")` / `QLabel("FPS:")` / `QLabel("保存:")`，控件一藏标签就成了孤儿文字。→ 改法：每行套一个 `QWidget` 容器（`_wrap_row()`），整行一起显示/隐藏，隐藏的行在布局里不占高度。验收 27 项全过（`_verify_modes.py`，已删）：三种模式下该出现的标签/控件在、不该出现的不在；面板高度 文件夹 143 / 单图 114 / 摄像头 162 px |
+| m04827 | 用户（配摄像头模式截图）："将"保存"改成"保存张数"，输入框里只显示数字"→ `ui/widgets/source_panel.py`：标签 `QLabel("保存:")` → `QLabel("保存张数:")`；`spin_max_saved.setSuffix("")`（原来是 `" 张"`），单位交给左边标签表达。验收 6 项全过（`_verify_savelabel.py`，已删）：标签在、旧标签没了、框内恒为纯数字（10 / 改 37 后仍是 `"37"`）、前缀后缀皆空 |

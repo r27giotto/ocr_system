@@ -73,7 +73,8 @@ class SourcePanel(QGroupBox):
         self.spin_max_saved = QSpinBox()
         self.spin_max_saved.setRange(1, 999)
         self.spin_max_saved.setValue(int(cam_cfg.get("max_saved_images", 10) or 10))
-        self.spin_max_saved.setSuffix(" 张")
+        # 框里只放数字：单位由左边「保存张数:」这个标签表达，不再加 " 张" 后缀
+        self.spin_max_saved.setSuffix("")
         self.spin_max_saved.valueChanged.connect(self.max_saved_changed.emit)
         self.btn_raw_hist = QPushButton("原图历史")
         self.btn_raw_hist.clicked.connect(
@@ -129,7 +130,7 @@ class SourcePanel(QGroupBox):
         self._row_cam = self._wrap_row(cam_row)
 
         save_row = QHBoxLayout()
-        save_row.addWidget(QLabel("保存:"))
+        save_row.addWidget(QLabel("保存张数:"))
         save_row.addWidget(self.spin_max_saved)
         save_row.addWidget(self.btn_raw_hist)
         save_row.addWidget(self.btn_result_hist)
