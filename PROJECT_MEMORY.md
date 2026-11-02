@@ -496,15 +496,19 @@ demo 用的样张目录：E:\Python Project\project_0\data\test3   （11 张图�
 | `infra/serial_service.py` | 66 | 简化版串口；发裸 `b'1'`/`b'0'`（协议已由固件定案，见 §5.4.1） | ⚠️ 未接过真设备 |
 | `arduino/sketch_oct19a/sketch_oct19a.ino` | 42 | **用户写的**接收端固件：`'1'`→开阀 100ms→自动关，`'0'`→立即关 | ✅ **已烧录，行为符合预期**（m03767）；⚠️ 未与 Python 侧联调 |
 | `infra/csv_logger.py` | 38 | CSV 记录 | ⚠️ **有截断缺陷，见缺陷①** |
-| `app/controller.py` | 274 | `AppController`（编排层）；**每帧必发一个串口字节**，`frames_in`/`results_out` 对账；**`source_state` 是输入源运行状态的唯一真源**（只在变化时发，m00002）；**`models_ready`/`_loading` 是模型就绪状态的唯一真源**（未加载/加载中拒开跑、运行中拒绝加载，m00804） | ✅ 已实测（见 §6.4、§7.3） |
-| `app/workers.py` | 87 | `EngineLoadWorker` / `InferenceWorker`；**队列不丢帧**，`frame_processed` 做背压 | ✅ 已实测（见 §6.4） |
-| `ui/main_window.py` | 204 | 主窗口，组装七个面板；竖直 `QSplitter` 分隔历史区，右列包 `QScrollArea`；状态栏显示 `→ G/NG` 与 `待处理 N`；`source_state → set_running`、`source_error → 状态栏`、`engine_busy → source_panel.set_engine_busy` | ✅ 已实测（见 §6.1 / §6.3 / §6.4 / §7.3） |
-| `ui/overlay.py` | 35 | 画框 + 结果叠加；**大号 `G`/`NG` 按文字宽度右对齐**，配色同 §6.3 | ✅ 已实测（见 §6.3） |
+| `app/controller.py` | 372 | `AppController`（编排层）；**每帧必发一个串口字节**，`frames_in`/`results_out` 对账；**`source_state` 是输入源运行状态的唯一真源**（只在变化时发，m00002）；**`models_ready`/`_loading` 是模型就绪状态的唯一真源**（未加载/加载中拒开跑、运行中拒绝加载，m00804）；**摄像头模式**：`test_camera()` / `camera_tested` 门禁 / `capture_store` 生命周期（§6.5） | ✅ 已实测（见 §6.4、§6.5、§7.3） |
+| `app/workers.py` | 190 | `EngineLoadWorker` / `InferenceWorker`；**队列不丢帧**，`frame_processed` 做背压；**`CameraWorker`**（预览 `mode="free"` / 采图 `mode="trigger"`，`_ack.wait(30)` 背压，超时发 `warn`） | ✅ 已实测（见 §6.4、§6.5） |
+| `ui/main_window.py` | 258 | 主窗口，组装七个面板；竖直 `QSplitter` 分隔历史区，右列包 `QScrollArea`；状态栏显示 `→ G/NG` 与 `待处理 N`；`source_state → set_running`、`source_error → 状态栏`（摄像头模式额外弹窗）、`engine_busy → source_panel.set_engine_busy`；**相机**：`preview_ready → image_view`、`open_dir_requested → _on_open_dir`（`QDesktopServices` 打开目录）、`max_saved_changed → _on_max_saved_changed`（写回 config.yaml） | ✅ 已实测（见 §6.1 / §6.3 / §6.4 / §6.5 / §7.3） |
+| `ui/overlay.py` | 8 | 只是 `from core.render import draw_overlay` 的 re-export（画框逻辑已迁到 `core/render.py`） | ✅ 已实测 |
 | `ui/widgets/angle_panel.py` | 263 | 固定角度 0°/180° 单独一行（不受负号影响）+ 旋转角度网格（**步长下拉框 5/10/15/20/30**，默认 5° 共 35 格）+「负号」开关 + 全选/仅 0°/反选/默认 | ✅ 已实测 |
 | `ui/widgets/history_panel.py` | 187 | 历史缩略图，**固定 120×120** + 高度可一直往下拖（最小 113px）+ 横/竖滚轴按需 + 清除按钮；卡片显示 `数字 → G/NG/?`，边框色同 §6.3 | ✅ 已实测（见 §6.2 / §6.3） |
 | `ui/widgets/result_panel.py` | 64 | 结果显示；**大方框显示 `G`/`NG`/`?`**（底色绿/红/橙），tooltip 给出原始 `output_value` | ✅ 已实测（见 §6.3） |
 | `ui/widgets/model_panel.py` | 102 | 识别模型下拉（`rec_options`）+ 方向模型下拉 + 加载按钮 + **状态标签**（加载中/已加载：名/失败原因/**切换未加载**提示，m00804） | ✅ 已实测（加载联动，见 §7.3） |
-| `ui/widgets/source_panel.py` | 149 | 输入源（文件夹/单图/摄像头）+ 路径 + 摄像头号/FPS/间隔/循环 + 开始/停止；`set_running()` / `set_engine_busy()` 改状态后统一走 `_apply_buttons()`（加载中禁用「开始」并给 tooltip，m00804） | ✅ 开始/停止与加载联动已实测（`test_source_state.py`、`test_engine_ready.py`），其余控件未点过 |
+| `ui/widgets/source_panel.py` | 224 | 输入源（文件夹/单图/摄像头）+ 路径 + 摄像头号/FPS/间隔/循环 + 开始/停止；`set_running()` / `set_engine_busy()` 改状态后统一走 `_apply_buttons()`（加载中禁用「开始」并给 tooltip，m00804）；**摄像头模式三增项**：`测试摄像头`（+`lbl_cam_status`）/ `保存:N 张` / `原图历史`+`识别历史`，靠 `_update_mode_visibility()` 只在摄像头模式出现（§6.5） | ✅ 相机模式 35 项已用假相机实测（§6.5） |
+| `infra/basler_camera.py` | 212 | `BaslerCamera`：`open(mode)`/`grab()`/`close()`；`pypylon` 延迟导入，没装时 `is_available()` 返回 False 并给安装提示 | ⚠️ 无硬件，未真机验证 |
+| `infra/capture_store.py` | 150 | `CaptureStore`：按时间戳建会话子目录，原图/结果图同名落盘，`prune()` 跨会话滚动裁剪 | ✅ 已实测（§6.5） |
+| `infra/config_writer.py` | 114 | `set_value(path, "a.b", v)`：只改 YAML 文本里那一行的值、保留注释、原子替换、回读校验；失败抛 `ConfigWriteError` | ✅ 已实测（30 项） |
+| `core/render.py` | 42 | `draw_overlay(img, res)`（从 `ui/overlay.py` 迁出，便于控制器在非 UI 线程画结果图） | ✅ 已实测 |
 | `ui/widgets/serial_panel.py` | 97 | 串口选择/连接/断开 + 「每帧必发」说明 | ⚠️ 仅 import 验证 |
 | `ui/widgets/image_view.py` | 49 | 主图显示（`QLabel` + 等比例缩放） | ✅ 已实测 |
 
@@ -655,6 +659,39 @@ pending     = frames_in - results_out   ← 正常恒为 0；界面状态栏显�
 
 > 语义变化提醒：`poll_interval_ms` 以前是固定节拍，现在是「处理完再等这么久」。
 > 想尽快跑完就把间隔设小（界面下限 50 ms）；想慢慢看就设大。
+
+### 6.5 ★ Basler 摄像头模式（m04085–m04303，已实现；无硬件未真机验证）
+
+设计全文在 `docs/superpowers/specs/2026-10-15-ocr-system-design.md` §16。代码现状：
+
+| 文件 | 作用 |
+|---|---|
+| `infra/basler_camera.py` | `BaslerCamera(config)`：`open(mode="trigger"/"free", serial=None)` / `grab(timeout_ms)` / `close()`；`enumerate_devices()` / `is_available()`；`CameraError`；`_to_bgr` 把 mono8 扩成三通道、BayerRG8 走 `cv2.cvtColor` |
+| `infra/capture_store.py` | `CaptureStore(raw_root, result_root, max_images)`：`new_session()` 按 `%Y%m%d_%H%M%S` 建**两个**会话子目录，`save(raw, result)` **同名**落盘，`prune()` 按时间先后跨会话裁到上限 |
+| `core/render.py` | `draw_overlay(img, res)`（从 `ui/overlay.py` 迁来，`ui/overlay.py` 只是 re-export） |
+| `app/workers.py` | 新增 `CameraWorker(QThread)`：`test_requested` 时 `mode="free"` 连续取图发 `preview`；`start_source` 时 `mode="trigger"`，收一条走一条，`_ack.wait(30)` 背压，超时发 `warn` |
+| `app/controller.py` | `preview_ready` / `camera_status` 信号；`test_camera()` / `_stop_preview()`；`camera_tested` 门禁；`capture_store` 生命周期 |
+| `ui/widgets/source_panel.py` | 三处增项：`测试摄像头`（+`lbl_cam_status`）、`保存:N 张` 微调框、`原图历史` / `识别历史` 两个按钮；`_update_mode_visibility()` 让它们**只在摄像头模式出现** |
+| `ui/main_window.py` | `_on_preview` / `_on_open_dir` / `_on_max_saved_changed`；`_on_source_error` 在摄像头模式改弹窗 |
+
+**硬规则（用户明确要求，m04106）**：点「开始」前**必须先点过「测试摄像头」**，否则弹窗
+「摄像头还没测过：请先点「测试摄像头」确认能出图」。`controller.camera_tested` 是唯一真源，
+`test_camera()` 失败会把它复位。
+
+**落盘目录**：`storage.capture_raw_dir` / `capture_result_dir`（默认
+`./logs/captures_raw` / `./logs/captures_result`）。每次点「开始」新建
+`<YYYYMMDD_HHMMSS>/` 子目录，两棵树下同名。原图 `frame` 直接存；结果图存
+`draw_overlay(frame, res)`。
+
+**上限**：`camera.max_saved_images`（默认 10，界面可调并**写回 config.yaml**，见
+`infra/config_writer.py`）；`history.max_items`（默认 200，用户要 10 时改这个）控内存里
+历史面板的条数。两个是**独立**的。
+
+**验收**（`_verify_camera_ui.py`，临时已删，用假相机，EXIT=0，35 项全过）：控件存在与
+模式联动（文件夹模式隐藏 / 摄像头模式显示）；没测就点开始被拦 + 弹窗 + `camera_tested`
+仍 False；假相机跑到预览帧、`已连接` 状态文字、`camera_tested` 置真；`开始` 走
+`trigger` 模式、建会话目录、原图与结果图**同名同数量**（实测 8 对）、真出识别结果；
+停止后 `current_source` 归 None；点「保存张数」写回临时配置且**不动真配置**；超上限被裁。
 
 ---
 
@@ -1025,3 +1062,4 @@ git add -A ; git commit -m "说明"
 | — | 【已实测】新增 **`test/test_engine_ready.py`**（189 行，离屏、`paddlex.create_model` 桩掉、`FakePipeline`、不加载真模型）6 组全过 EXIT=0：①未加载点开始被拒且按钮不卡灰 ②加载中「开始」禁用+tooltip，控制器层直连 `start_source()` 也被拒（**Qt 里禁用按钮的 `click()` 不触发 clicked，绕不过 UI 层，所以必须直连验证第二道闸**）③`_on_load_done(False,…)` 后面板红字且 `rec_model_name == ""`（模型名未被污染）④成功后 `models_ready`、标签含模型名、可开跑 ⑤切到别的模型未加载→标签含「未加载」且不含「已加载：」⑥运行中 `load_models` 被拒（`_load_worker` 不变、消息含「运行」）且不影响正在跑的检测。`test/test_source_state.py` 加 `ctrl.mark_models_loaded(...)` 后 6 组仍全过；`import main` OK；仓库 33 个 `.py` 全部 `ast.parse` 通过 |
 | — | 文档同步（同一次）：设计文档升 **v2.0** —— 表头日期+v2.0 变更行、§10 J5 备注改写为「实际缺口更大：加载锁会堵输入源线程」、§11 **新增 D13**（含三处根因与修法/行号）、§13 新增**第 13 条验收**（模型门禁）、§14 状态表加一行；本文件：表头、§6 四个模块行数与状态、§7.3 新增、§11 常用命令加两套回归、本时间线 |
 | m01023 | 用户装好 git 后：「创建git本地仓库并提交」→ **仓库建立**：git 2.56.0 在 `D:\Git\cmd\git.exe`（机器级 PATH 已含，但运行中的 shell 需刷新 PATH 才看得见）；`git init` + 分支改 `main`；仓库级身份 `ocr_system <ocr_system@localhost>`（全局为空，没动）；`.gitignore` 挡住 `.venv/`（4.6 GB）、`models/`（477 MB）、`logs/*.log|*.csv`、`__pycache__`、`_*` 探针文件；`.gitattributes` 统一 `eol=lf` 并把图片/权重标成 binary。首个提交 **`72a89fa`**：45 文件 / 7,504 行（含 `ocr.ico`、`OCR系统.lnk`、`uv.lock`、`test_engine_ready.py`），工作区干净。**无远程**，所以只能本地提交 |
+| m04085–m04303 | 用户提出 Basler 相机模式（acA1300-60gm，黑白，硬件触发 5fps，NPN 电眼，网线直连），并且**明确要求先讨论、后改代码**。设计文档升到 v2.1 新增 §16（相机选型/预览与采图两种打开模式/硬触发接线/测试摄像头门禁/落盘与会话目录/滚动上限/启动顺序）。获批后实现：新增 infra/basler_camera.py / infra/capture_store.py / infra/config_writer.py / core/render.py，pp/workers.py 加 CameraWorker，pp/controller.py 加 camera_tested 门禁与 capture_store，ui/widgets/source_panel.py 加「测试摄像头 / 保存张数 / 原图历史 / 识别历史」，ui/main_window.py 接预览与目录打开，config.yaml 加 history / camera / storage 三段。pypylon 26.9 已 uv 装好（纯 wheel，不依赖 Pylon SDK）。验收 35 项全过（假相机）。**⚠️ 没有硬件，全部未经真机验证** |

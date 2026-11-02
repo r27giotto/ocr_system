@@ -1,3 +1,5 @@
+# -*- coding: utf-8 -*-
+"""输入源面板：文件夹 / 单图 / 摄像头（Basler 硬件触发）。"""
 from PyQt6.QtWidgets import (
     QGroupBox, QRadioButton, QLineEdit, QPushButton, QComboBox,
     QSpinBox, QCheckBox, QFileDialog, QHBoxLayout, QVBoxLayout, QLabel
@@ -8,14 +10,23 @@ from PyQt6.QtCore import pyqtSignal
 class SourcePanel(QGroupBox):
     start_requested = pyqtSignal(dict)
     stop_requested = pyqtSignal()
+    test_requested = pyqtSignal()            # 「测试摄像头」
+    open_dir_requested = pyqtSignal(str)     # 「原图历史」：把路径交给上层去打开
+    max_saved_changed = pyqtSignal(int)      # 「保存张数」变了，要写回 config.yaml
 
     def __init__(self, config: dict = None):
-        """config 传 `config.yaml` 的 `source:` 段，作为各控件的**初始值**。
-
-        界面上的改动不会写回 config.yaml —— 它只决定「打开界面时是什么状态」。
+        """config 传**整份** `config.yaml`：本面板用到 `source:` / `camera:` /
+        `storage:` 三段。界面上的改动不会写回文件，除了「保存张数」——那个由
+        上层通过 `max_saved_changed` 落盘。
         """
         super().__init__("输入源")
-        cfg = dict(config or {})
+        full = dict(config or {})
+        cfg = dict(full.get("source", {}) or {})
+        cam_cfg = dict(full.get("camera", {}) or {})
+        storage = dict(full.get("storage", {}) or {})
+        self._raw_dir = str(storage.get("capture_raw_dir", "./logs/captures_raw"))
+        self._result_dir = str(
+            storage.get("capture_result_dir", "./logs/captures_result"))
 
         # 类型
         self.rb_folder = QRadioButton("文件夹")
@@ -36,6 +47,15 @@ class SourcePanel(QGroupBox):
         self.btn_browse = QPushButton("浏览…")
         self.btn_browse.clicked.connect(self._browse)
 
+        # 文件夹参数
+        self.interval_spin = QSpinBox()
+        self.interval_spin.setRange(50, 5000)
+        self.interval_spin.setValue(int(cfg.get("poll_interval_ms", 300) or 300))
+        self.interval_spin.setSuffix(" ms")
+        # 循环播放：默认**不勾选**（`source.loop` 默认 false）。
+        self.loop_check = QCheckBox("循环播放")
+        self.loop_check.setChecked(bool(cfg.get("loop", False)))
+
         # 摄像头参数
         self.cam_combo = QComboBox()
         self.cam_combo.addItems(["0", "1", "2", "3"])
@@ -45,28 +65,37 @@ class SourcePanel(QGroupBox):
         self.fps_spin = QSpinBox()
         self.fps_spin.setRange(1, 60)
         self.fps_spin.setValue(int(cfg.get("fps", 15) or 15))
+        self.btn_test = QPushButton("测试摄像头")
+        self.btn_test.clicked.connect(self.test_requested.emit)
 
-        # 文件夹参数
-        self.interval_spin = QSpinBox()
-        self.interval_spin.setRange(50, 5000)
-        self.interval_spin.setValue(int(cfg.get("poll_interval_ms", 300) or 300))
-        self.interval_spin.setSuffix(" ms")
-        # 循环播放：默认**不勾选**（`source.loop` 默认 false）。
-        # 勾上才有「放完一遍再从第一张开始」的行为，否则跑完一遍就停。
-        self.loop_check = QCheckBox("循环播放")
-        self.loop_check.setChecked(bool(cfg.get("loop", False)))
+        # 保存张数（会写回 config.yaml）
+        self.spin_max_saved = QSpinBox()
+        self.spin_max_saved.setRange(1, 999)
+        self.spin_max_saved.setValue(int(cam_cfg.get("max_saved_images", 10) or 10))
+        self.spin_max_saved.setSuffix(" 张")
+        self.spin_max_saved.valueChanged.connect(self.max_saved_changed.emit)
+        self.btn_raw_hist = QPushButton("原图历史")
+        self.btn_raw_hist.clicked.connect(
+            lambda: self.open_dir_requested.emit(self._raw_dir))
+        self.btn_result_hist = QPushButton("识别历史")
+        self.btn_result_hist.clicked.connect(
+            lambda: self.open_dir_requested.emit(self._result_dir))
+
+        self.lbl_cam_status = QLabel("未连接相机")
+        self.lbl_cam_status.setStyleSheet("color:#888;")
+        self.lbl_cam_status.setWordWrap(True)
+
+        self._running = False
+        self._engine_busy = False
 
         # 按钮
         self.btn_start = QPushButton("▶ 开始")
         self.btn_stop = QPushButton("■ 停止")
         self.btn_stop.setEnabled(False)
-        # 引擎在加载模型时「开始」也要按不下去（见 set_engine_busy）
-        self._running = False
-        self._engine_busy = False
         self.btn_start.clicked.connect(self._start)
         self.btn_stop.clicked.connect(self.stop_requested.emit)
 
-        # 布局
+        # ---- 布局 ----
         type_row = QHBoxLayout()
         type_row.addWidget(self.rb_folder)
         type_row.addWidget(self.rb_single)
@@ -76,16 +105,32 @@ class SourcePanel(QGroupBox):
         path_row = QHBoxLayout()
         path_row.addWidget(self.path_edit, 1)
         path_row.addWidget(self.btn_browse)
+        self._path_widgets = [self.path_edit, self.btn_browse]
+
+        folder_row = QHBoxLayout()
+        folder_row.addWidget(QLabel("间隔:"))
+        folder_row.addWidget(self.interval_spin)
+        folder_row.addWidget(self.loop_check)
+        folder_row.addStretch()
+        self._folder_widgets = [self.interval_spin, self.loop_check]
 
         cam_row = QHBoxLayout()
         cam_row.addWidget(QLabel("摄像头:"))
         cam_row.addWidget(self.cam_combo)
         cam_row.addWidget(QLabel("FPS:"))
         cam_row.addWidget(self.fps_spin)
-        cam_row.addWidget(QLabel("间隔:"))
-        cam_row.addWidget(self.interval_spin)
-        cam_row.addWidget(self.loop_check)
+        cam_row.addWidget(self.btn_test)
         cam_row.addStretch()
+        self._cam_widgets = [self.cam_combo, self.fps_spin, self.btn_test]
+
+        save_row = QHBoxLayout()
+        save_row.addWidget(QLabel("保存:"))
+        save_row.addWidget(self.spin_max_saved)
+        save_row.addWidget(self.btn_raw_hist)
+        save_row.addWidget(self.btn_result_hist)
+        save_row.addStretch()
+        self._save_widgets = [self.spin_max_saved, self.btn_raw_hist,
+                              self.btn_result_hist]
 
         btn_row = QHBoxLayout()
         btn_row.addWidget(self.btn_start)
@@ -95,9 +140,34 @@ class SourcePanel(QGroupBox):
         v = QVBoxLayout(self)
         v.addLayout(type_row)
         v.addLayout(path_row)
+        v.addLayout(folder_row)
         v.addLayout(cam_row)
+        v.addLayout(save_row)
+        v.addWidget(self.lbl_cam_status)
         v.addLayout(btn_row)
 
+        for rb in (self.rb_folder, self.rb_single, self.rb_camera):
+            rb.toggled.connect(self._update_mode_visibility)
+        self._update_mode_visibility()
+
+    # ---- 模式联动 ---------------------------------------------------------
+    def _update_mode_visibility(self, *_):
+        is_camera = self.rb_camera.isChecked()
+        is_folder = self.rb_folder.isChecked()
+        for w in self._path_widgets:
+            w.setVisible(not is_camera)
+        for w in self._folder_widgets:
+            w.setVisible(is_folder)
+        for w in self._cam_widgets:
+            w.setVisible(is_camera)
+        for w in self._save_widgets:
+            w.setVisible(is_camera)
+        self.lbl_cam_status.setVisible(is_camera)
+
+    def set_camera_status(self, text: str):
+        self.lbl_cam_status.setText(text)
+
+    # ---- 事件 -------------------------------------------------------------
     def _browse(self):
         if self.rb_single.isChecked():
             path, _ = QFileDialog.getOpenFileName(
@@ -134,16 +204,21 @@ class SourcePanel(QGroupBox):
         self.start_requested.emit(cfg)
 
     def set_running(self, running: bool):
-        self._running = running
-        self._apply_buttons()
+        self._running = bool(running)
+        # 运行中允许再点「测试摄像头」是不合理的：那会抢相机
+        self.btn_test.setEnabled(not running)
+        self.btn_start.setEnabled(not running and not self._engine_busy)
+        self.btn_stop.setEnabled(running)
 
     def set_engine_busy(self, busy: bool):
-        """模型加载中：「开始」也要禁用 —— 不然能开跑，推理线程会堵在加载锁上。"""
-        self._engine_busy = busy
-        self._apply_buttons()
-
-    def _apply_buttons(self):
+        """模型正在加载时禁掉「开始」：加载线程持着引擎锁，这时开跑会把
+        推理线程堵在加载器后面。"""
+        self._engine_busy = bool(busy)
         self.btn_start.setEnabled(not self._running and not self._engine_busy)
-        self.btn_stop.setEnabled(self._running)
-        self.btn_start.setToolTip(
-            "模型正在加载，请稍候…" if self._engine_busy else "")
+
+    def set_running_false(self):
+        self.set_running(False)
+
+    @property
+    def max_saved(self) -> int:
+        return self.spin_max_saved.value()

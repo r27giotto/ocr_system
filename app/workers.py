@@ -1,4 +1,6 @@
 import queue
+import threading
+import time
 import traceback
 
 from PyQt6.QtCore import QThread, pyqtSignal
@@ -85,3 +87,104 @@ class InferenceWorker(QThread):
     def stop(self):
         self._running = False
         self.wait(2000)
+
+
+class CameraWorker(QThread):
+    """Basler 取图线程，一个类管两种模式。
+
+    - `mode="preview"`（对应界面「测试摄像头」）：关掉硬件触发，自己连续取图，
+      只发 `preview` 给界面显示，**不进推理、不落盘、不发串口**。
+    - `mode="capture"`（对应「开始」）：等电眼硬件触发，每取到一张就发
+      `frame_ready`，然后**等控制器回一次 `frame_done()` 才取下一下**。
+      这样和文件夹模式是同一套背压：一张图进 ⇒ 一个结果出，不丢帧。
+
+    相机在 `run()` 里才打开 —— 打开失败要能变成一条 `error` 信号，而不是把
+    界面线程卡住。
+    """
+
+    preview = pyqtSignal(object)             # 预览帧（np.ndarray，BGR）
+    frame_ready = pyqtSignal(object, str)    # 交给推理
+    opened = pyqtSignal(str)                 # 打开成功，参数=设备名
+    error = pyqtSignal(str)
+    warn = pyqtSignal(str)                   # 非致命：某特性不支持等
+
+    def __init__(self, camera_cfg: dict, mode: str = "capture",
+                 store=None, preview_fps: int = 10):
+        super().__init__()
+        self.camera_cfg = dict(camera_cfg or {})
+        self.mode = mode
+        self.store = store
+        self.preview_interval = 1.0 / max(1, int(preview_fps))
+        self._running = True
+        self._ack = threading.Event()
+        self._camera = None
+        self._seq = 0
+
+    # ---- 与 FolderSource 对齐的接口，控制器不用区分来源 ----
+    def frame_done(self) -> None:
+        self._ack.set()
+
+    def stop(self) -> None:
+        self._running = False
+        self._ack.set()          # 唤醒可能在等 ack 的循环
+        if not self.wait(3000):
+            self.wait(2000)
+        cam, self._camera = self._camera, None
+        if cam is not None:
+            cam.close()
+
+    # ---- 线程主体 ----
+    def run(self):
+        from infra.basler_camera import BaslerCamera, CameraError
+
+        cam = BaslerCamera(self.camera_cfg)
+        self._camera = cam
+        try:
+            cam.open(mode="free" if self.mode == "preview" else "trigger")
+        except CameraError as exc:
+            self.error.emit(str(exc))
+            return
+        except Exception as exc:                      # pragma: no cover
+            traceback.print_exc()
+            self.error.emit("打开相机时发生未预期错误：%s" % (exc,))
+            return
+        for w in cam.warnings:
+            self.warn.emit(w)
+        self.opened.emit(cam.device_name or "Basler 相机")
+
+        try:
+            if self.mode == "preview":
+                self._loop_preview(cam)
+            else:
+                self._loop_capture(cam)
+        except Exception as exc:                      # pragma: no cover
+            traceback.print_exc()
+            self.error.emit("取图过程中出错：%s" % (exc,))
+        finally:
+            cam.close()
+            self._camera = None
+
+    def _loop_preview(self, cam):
+        while self._running:
+            t0 = time.time()
+            frame = cam.grab(timeout_ms=500)
+            if frame is not None and self._running:
+                self.preview.emit(frame)
+            rest = self.preview_interval - (time.time() - t0)
+            if rest > 0:
+                time.sleep(rest)
+
+    def _loop_capture(self, cam):
+        while self._running:
+            frame = cam.grab()          # 超时返回 None：没工件过来，属正常
+            if frame is None:
+                continue
+            if not self._running:
+                break
+            self._seq += 1
+            name = "%s/%06d" % (self.store.session_name if self.store else "-",
+                                self._seq)
+            self._ack.clear()
+            self.frame_ready.emit(frame, name)
+            # 等这一帧处理完再取下一下（不丢帧）。stop() 会把 _ack 置起来。
+            self._ack.wait(30.0)

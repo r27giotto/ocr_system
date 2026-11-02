@@ -1,8 +1,13 @@
+import os
+
 from PyQt6.QtWidgets import (
     QMainWindow, QWidget, QHBoxLayout, QVBoxLayout, QSplitter,
     QLabel, QStatusBar, QMessageBox, QScrollArea, QFrame
 )
-from PyQt6.QtCore import Qt, QTimer
+from PyQt6.QtCore import Qt, QTimer, QUrl
+from PyQt6.QtGui import QDesktopServices
+
+from infra.config_writer import ConfigWriteError, set_value
 
 from ui.widgets.angle_panel import AnglePanel
 from ui.widgets.history_panel import HistoryPanel
@@ -35,7 +40,7 @@ class MainWindow(QMainWindow):
             default_rec=config["models"]["default_rec"],
             default_ori=config["models"]["default_ori"],
         )
-        self.source_panel = SourcePanel(config.get("source", {}))
+        self.source_panel = SourcePanel(config)
         self.angle_panel = AnglePanel(config["recognizer"]["angles"])
         self.result_panel = ResultPanel()
         self.serial_panel = SerialPanel()
@@ -80,7 +85,8 @@ class MainWindow(QMainWindow):
         # 放进竖直 QSplitter，用户可以直接拖动分隔条调节历史区高度；
         # 但缩略图尺寸是固定的（HistoryItem.THUMB_W/THUMB_H），拉高历史区
         # 只会露出更多滚动区，不会把图片放大。
-        self.history_panel = HistoryPanel()
+        self.history_panel = HistoryPanel(
+            int((config.get("history", {}) or {}).get("max_items", 200) or 200))
 
         self.v_splitter = QSplitter(Qt.Orientation.Vertical)
         self.v_splitter.addWidget(splitter)
@@ -112,6 +118,13 @@ class MainWindow(QMainWindow):
         # 输入源
         self.source_panel.start_requested.connect(self.controller.start_source)
         self.source_panel.stop_requested.connect(self.controller.stop_source)
+        # 相机：测试 / 打开原图目录 / 保存张数写回
+        self.source_panel.test_requested.connect(
+            lambda: self.controller.test_camera())
+        self.source_panel.open_dir_requested.connect(self._on_open_dir)
+        self.source_panel.max_saved_changed.connect(self._on_max_saved_changed)
+        self.controller.preview_ready.connect(self._on_preview)
+        self.controller.camera_status.connect(self.source_panel.set_camera_status)
 
         # 角度
         self.angle_panel.angles_changed.connect(self.controller.set_angles)
@@ -162,9 +175,49 @@ class MainWindow(QMainWindow):
         self.serial_panel.set_ports(ports)
 
     def _on_source_error(self, msg: str):
-        """输入源起不来（路径不存在 / 摄像头打不开）。按钮已由
-        controller.source_state 复位，这里只负责把原因说给用户看。"""
+        """输入源起不来（路径不存在 / 摄像头打不开 / 没测就开拍）。按钮已由
+        controller.source_state 复位，这里负责把原因说给用户看。
+
+        相机相关错误用弹窗，因为这往往是「线没插 / 没点测试」这类必须先解决的
+        问题，只写状态栏容易被忽略；文件路径错误继续只写状态栏。
+        """
         self.status_bar.showMessage(f"启动输入源失败：{msg}", 10000)
+        if self.source_panel.rb_camera.isChecked():
+            QMessageBox.warning(self, "摄像头", msg)
+
+    # ---------- 相机 ----------
+    def _on_preview(self, frame):
+        """「测试摄像头」的预览帧：只显示，不参与识别。"""
+        self.image_view.set_frame(frame, "预览")
+
+    def _project_root(self) -> str:
+        return os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
+    def _on_open_dir(self, path: str):
+        """打开落盘目录（原图历史 / 识别历史）。目录不存在就先建出来。"""
+        full = path if os.path.isabs(path) else os.path.join(self._project_root(), path)
+        try:
+            os.makedirs(full, exist_ok=True)
+        except OSError as e:
+            self.status_bar.showMessage(f"目录无法创建：{e}", 5000)
+            return
+        QDesktopServices.openUrl(QUrl.fromLocalFile(full))
+
+    def _on_max_saved_changed(self, value: int):
+        """「保存张数」变了：立刻生效，并写回 config.yaml（下次打开还在）。"""
+        self.config.setdefault("camera", {})["max_saved_images"] = int(value)
+        store = getattr(self.controller, "capture_store", None)
+        if store is not None:
+            store.max_images = max(1, int(value))
+            store.prune()
+        cfg_path = os.path.join(self._project_root(), "config.yaml")
+        if not os.path.isfile(cfg_path):
+            return
+        try:
+            set_value(cfg_path, "camera.max_saved_images", int(value))
+            self.status_bar.showMessage(f"保存张数已改为 {value}，并写入 config.yaml", 3000)
+        except ConfigWriteError as e:
+            self.status_bar.showMessage(f"保存张数已生效，但写回配置失败：{e}", 6000)
 
     def _on_open_serial(self, port: str, baud: int):
         ok, msg = self.controller.open_serial(port, baud)

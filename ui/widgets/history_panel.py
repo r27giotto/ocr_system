@@ -105,14 +105,15 @@ class HistoryPanel(QGroupBox):
     item_clicked = pyqtSignal(object)
     cleared = pyqtSignal()
 
-    MAX_ITEMS = 200
     # 允许被拖到的最小高度：只剩滚轴 + 一小条缩略图。
     # （完整显示一条记录需要 THUMB_H + 44 = 164，即面板约 221px；
     #   拖到比这更矮时缩略图会被裁切，靠**竖向滚轴**看全。）
     MIN_VIEW_H = 56
 
-    def __init__(self):
+    def __init__(self, max_items: int = 200):
         super().__init__("检测结果历史")
+        # 只保留最近 N 条（`config.yaml` 的 `history.max_items`，用户要的是 10）。
+        self.max_items = max(1, int(max_items or 200))
         # 高度完全交给外层竖直 QSplitter 的分隔条：往上拖变高、往下拖变矮，
         # 没有硬性下限（只有 MIN_VIEW_H 这么一点底），不会被钳住。
         self.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Expanding)
@@ -159,7 +160,7 @@ class HistoryPanel(QGroupBox):
         self.layout.addWidget(item)
 
         # 限制数量
-        while self.layout.count() > self.MAX_ITEMS:
+        while self.layout.count() > self.max_items:
             old = self.layout.takeAt(0)
             if old.widget():
                 old.widget().deleteLater()

@@ -10,9 +10,11 @@ from core.decision import DecisionMaker
 from core.pipeline import OcrPipeline
 from infra.serial_service import SerialService
 from infra.csv_logger import CsvLogger
+from infra.capture_store import CaptureStore
 from infra.image_source import FolderSource, CameraSource
+from core.render import draw_overlay
 
-from app.workers import EngineLoadWorker, InferenceWorker
+from app.workers import EngineLoadWorker, InferenceWorker, CameraWorker
 
 
 class AppController(QObject):
@@ -32,6 +34,9 @@ class AppController(QObject):
     #   源启动失败），以前只有第 1 条会通知界面，手动停止后按钮就一直灰着。
     source_state = pyqtSignal(bool)          # True=运行中, False=空闲
     source_error = pyqtSignal(str)           # 输入源启动失败（如路径不存在）
+    # ---- 相机模式 ----
+    preview_ready = pyqtSignal(object)       # 「测试摄像头」的预览帧（不进推理）
+    camera_status = pyqtSignal(str)          # 相机面板上那行状态文字
 
     def __init__(self, config: dict):
         super().__init__()
@@ -71,6 +76,12 @@ class AppController(QObject):
         # ---- 状态 ----
         self.current_source = None
         self._source_running = False
+        # ---- 相机 ----
+        # 「测试摄像头」点过且真的开出了图，「开始」才允许拍。
+        # 只点一次就够，之后重复开始/停止不再要求重测；相机一报错就作废。
+        self.camera_tested = False
+        self._preview_worker = None
+        self.capture_store = None
         # ★ 引擎状态：只有**加载成功**才把模型名交给 Recognizer。
         #   以前在 load_models() 开头就 set_models()，加载一失败，
         #   rec_model_name 已经是新名字，之后每帧都抛
@@ -137,6 +148,68 @@ class AppController(QObject):
     def set_targets(self, targets):
         self.decider.set_targets(targets)
 
+    # ---------- 相机 ----------
+    def test_camera(self, cfg: dict = None):
+        """「测试摄像头」：开相机连续取图，只显示在预览区，不进推理、不落盘。"""
+        self.stop_source()
+        self._stop_preview()
+        self.camera_tested = False
+        self.camera_status.emit("正在打开相机…")
+        worker = CameraWorker(self.config.get("camera", {}), mode="preview",
+                              preview_fps=10)
+        worker.preview.connect(self.preview_ready.emit)
+        worker.opened.connect(self._on_camera_opened)
+        worker.error.connect(self._on_camera_error)
+        worker.warn.connect(self.camera_status.emit)
+        self._preview_worker = worker
+        worker.start()
+
+    def _stop_preview(self):
+        worker, self._preview_worker = self._preview_worker, None
+        if worker is None:
+            return
+        try:
+            worker.preview.disconnect()      # 别让残留帧盖掉正在跑的检测画面
+        except Exception:
+            pass
+        worker.stop()
+
+    @property
+    def previewing(self) -> bool:
+        return self._preview_worker is not None
+
+    def _on_camera_opened(self, name: str):
+        self.camera_tested = True
+        self.camera_status.emit("已连接：%s（预览中，点「开始」开拍）" % (name,))
+
+    def _on_camera_error(self, msg: str):
+        self.camera_tested = False
+        self.camera_status.emit("相机不可用")
+        self.source_error.emit(msg)
+
+    def _make_camera_source(self):
+        """建 CaptureStore + 新会话，返回待启动的取图线程。"""
+        storage = self.config.get("storage", {})
+        raw_dir = storage.get("capture_raw_dir", "./logs/captures_raw")
+        result_dir = storage.get("capture_result_dir", "./logs/captures_result")
+        max_keep = self.config.get("camera", {}).get("max_saved_images", 10)
+        try:
+            self.capture_store = CaptureStore(raw_dir, result_dir, max_keep)
+            raw_path, result_path = self.capture_store.new_session()
+        except OSError as e:
+            traceback.print_exc()
+            self.capture_store = None
+            self.source_error.emit("建落盘目录失败：%s" % (e,))
+            return None
+        self.camera_status.emit("开拍中，存到 %s" % (raw_path,))
+        print("[camera] 原图 ->", raw_path)
+        print("[camera] 结果 ->", result_path)
+        worker = CameraWorker(self.config.get("camera", {}), mode="capture",
+                              store=self.capture_store)
+        worker.error.connect(self._on_camera_error)
+        worker.warn.connect(self.camera_status.emit)
+        return worker
+
     # ---------- 输入源 ----------
     def start_source(self, cfg: dict):
         # ★ 引擎没就绪就别开跑：这时推理线程拿不到模型，
@@ -154,13 +227,27 @@ class AppController(QObject):
         self.stop_source()
         t = cfg["type"]
         if t == "camera":
-            src = CameraSource(cfg["camera_index"], cfg["fps"])
+            # ★ 用户的硬要求：点「开始」前必须先点过「测试摄像头」。
+            #   没测过就直接开拍的话，现场没法区分「没有工件」和「相机没配好」。
+            if not self.camera_tested:
+                self.source_state.emit(False)
+                self.source_error.emit(
+                    "摄像头还没测过：请先点「测试摄像头」确认能出图，"
+                    "再点「开始」。")
+                return
+            self._stop_preview()      # 同一台相机不能被两个线程同时占着
+            src = self._make_camera_source()
+            if src is None:
+                self.source_state.emit(False)
+                return
         else:
             path = cfg["path"]
             loop = cfg["loop"] and t == "folder"
             src = FolderSource(path, cfg["interval_ms"], loop)
         src.frame_ready.connect(self._on_frame)
-        src.read_failed.connect(self._on_read_failed)
+        # 只有文件类输入源会发 read_failed；相机线程没有这个信号
+        if hasattr(src, "read_failed"):
+            src.read_failed.connect(self._on_read_failed)
         # 把 src 绑给处理器：旧摄像头线程 stop() 之后可能还补发一次 finished，
         # 那一次绝不能把**新一轮**的运行状态关掉（_on_source_finished 会丢弃）。
         src.finished.connect(lambda s=src: self._on_source_finished(s))
@@ -243,7 +330,16 @@ class AppController(QObject):
             except Exception as e:
                 print("csv write error:", e)
 
-        # 3) 串口：**不做「仅变化时发送」**
+        # 3) 相机模式：原图 + 带框结果图各存一份到本次会话的时间戳目录
+        #    `res.frame` 是整帧原因，所以这里能同时还原出「原图」和「结果图」。
+        if self.capture_store is not None and res.frame is not None:
+            try:
+                self.capture_store.save(res.frame, draw_overlay(res.frame, res))
+            except Exception as e:
+                print("capture save error:", e)
+                traceback.print_exc()
+
+        # 4) 串口：**不做「仅变化时发送」**
         #    固件是「收到一个 '1' 吹一次、收到 '0' 立刻关」，按帧发才能逐颗动作；
         #    若只在变化时发，连续两颗 NG 的第二颗就不会吹。
         if self.serial.is_open:
@@ -269,6 +365,8 @@ class AppController(QObject):
     # ---------- 退出 ----------
     def shutdown(self):
         self.stop_source()
+        self._stop_preview()
+        self.capture_store = None
         self.infer_worker.stop()
         self.serial.close()
         self.csv.close()
