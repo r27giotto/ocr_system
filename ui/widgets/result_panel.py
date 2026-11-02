@@ -18,7 +18,9 @@ class ResultPanel(QGroupBox):
 
         self.number_label = QLabel("--")
         self.number_label.setStyleSheet("font-size: 22px; font-weight: bold;")
-        self.number_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        # 和「识别数字:」排在同一行，所以改成左对齐 + 垂直居中
+        self.number_label.setAlignment(
+            Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
 
         self.value_label = QLabel("--")
         self.value_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
@@ -34,9 +36,16 @@ class ResultPanel(QGroupBox):
         value_row.addWidget(self.value_label)
         value_row.addStretch()
 
+        # 「识别数字:」+ 数字同一行（用户要求），左边标签、紧跟数字、末尾留白
+        number_row = QHBoxLayout()
+        number_row.setContentsMargins(0, 0, 0, 0)
+        number_row.setSpacing(6)
+        number_row.addWidget(QLabel("识别数字:"))
+        number_row.addWidget(self.number_label)
+        number_row.addStretch()
+
         v = QVBoxLayout(self)
-        v.addWidget(QLabel("识别数字:"))
-        v.addWidget(self.number_label)
+        v.addLayout(number_row)
         v.addLayout(value_row)
         v.addWidget(self.conf_label)
         v.addWidget(self.angle_label)
