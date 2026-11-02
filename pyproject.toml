@@ -13,4 +13,5 @@ dependencies = [
     "pyyaml>=6.0.2",
     "pyqt6-sip>=13.13.0",
     "paddlex>=3.7.2",
+    "pypylon>=26.9",
 ]
