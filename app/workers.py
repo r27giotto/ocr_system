@@ -104,8 +104,17 @@ class CameraWorker(QThread):
     - `mode="preview"`（对应界面「测试摄像头」）：关掉硬件触发，自己连续取图，
       只发 `preview` 给界面显示，**不进推理、不落盘、不发串口**。
     - `mode="capture"`（对应「开始」）：等电眼硬件触发，每取到一张就发
-      `frame_ready`，然后**等控制器回一次 `frame_done()` 才取下一下**。
-      这样和文件夹模式是同一套背压：一张图进 ⇒ 一个结果出，不丢帧。
+      `frame_ready`，然后**立刻回去取下一张，不等推理**。
+
+      ★ 为什么不等：取流策略是 `GrabStrategy_LatestImageOnly`，它只保留
+      「最新一张没被取走的图」。以前取一张就 wait 到推理完（一帧 200ms+
+      很常见），这期间电眼又打了几次触发，那些图在相机里**被静默覆盖**，
+      等于工件根本没被看过。现在取图与推理解耦：取图线程只管尽快把图取走
+      丢进队列，推理线程按 FIFO 一张一张算，**一张都不丢**。
+
+      代价是积压时结果滞后。`max_backlog` 是硬上限（默认 60 帧）：积压到顶
+      就先不取图（让相机自己顶着），**绝不静默丢帧**；界面「待处理 N」
+      会如实涨起来。
 
     相机在 `run()` 里才打开 —— 打开失败要能变成一条 `error` 信号，而不是把
     界面线程卡住。
@@ -124,13 +133,18 @@ class CameraWorker(QThread):
         self.mode = mode
         self.store = store
         self.preview_interval = 1.0 / max(1, int(preview_fps))
+        self.max_backlog = max(1, int(self.camera_cfg.get("max_backlog", 60)))
         self._running = True
         self._ack = threading.Event()
+        self._inflight = 0
         self._camera = None
         self._seq = 0
 
     # ---- 与 FolderSource 对齐的接口，控制器不用区分来源 ----
     def frame_done(self) -> None:
+        """控制器每处理完一帧回一次：积压 -1，可继续取图。"""
+        if self._inflight > 0:
+            self._inflight -= 1
         self._ack.set()
 
     def stop(self) -> None:
@@ -185,6 +199,11 @@ class CameraWorker(QThread):
 
     def _loop_capture(self, cam):
         while self._running:
+            # 积压到上限就先不取图：宁可让相机自己顶着，也绝不静默丢帧。
+            while self._running and self._inflight >= self.max_backlog:
+                time.sleep(0.02)
+            if not self._running:
+                break
             frame = cam.grab()          # 超时返回 None：没工件过来，属正常
             if frame is None:
                 continue
@@ -193,7 +212,7 @@ class CameraWorker(QThread):
             self._seq += 1
             name = "%s/%06d" % (self.store.session_name if self.store else "-",
                                 self._seq)
-            self._ack.clear()
+            self._inflight += 1
             self.frame_ready.emit(frame, name)
-            # 等这一帧处理完再取下一下（不丢帧）。stop() 会把 _ack 置起来。
-            self._ack.wait(30.0)
+            # ★ 这里**不等**推理结果，立刻回去取下一张。若像以前那样等，
+            #   LatestImageOnly 会把等待期间电眼触发的图覆盖掉 —— 工件没被看过。

@@ -1,10 +1,12 @@
 # ocr_system 项目记忆
 
 > **这是本项目的"真相源"。接手前先完整读这里，不要凭代码猜。**
-> 最后更新：2026-11-02 12:30 · 对应代码状态：核心主链（图→OCR→G/NG→串口→Arduino）已实测跑通，
+> 最后更新：2026-11-02 13:10 · 对应代码状态：核心主链（图→OCR→G/NG→串口→Arduino）已实测跑通，
 > **摄像头模式（Basler + 硬件触发）代码齐全但真机一帧未出**（§7.4 A1）；
-> 仓库已推到 `https://github.com/r27giotto/ocr_system`（分支 `main`，13 个提交）；
-> 2026-11-02 做过一次全量审计，修掉 7 项、记下 **A1–A12**（§7.4）
+> 仓库已推到 `https://github.com/r27giotto/ocr_system`（分支 `main`）；
+> 2026-11-02 做过一次全量审计，修掉 **10 项**、记下 **A1–A12**（§7.4）；
+> 同日修掉 **A3（相机取图静默丢工件）** —— 取图与推理解耦 + `max_backlog` 背压，
+> 单帧 228ms（8 角度）⇒ 上限 4.4 件/秒，超过会顶满积压并开始丢触发（§7.4 第 10 条）
 > 内容分两类，请勿混淆：**【已实测】**＝有命令输出为证；**【未验证】**＝只是读代码推断，从没真正跑过。
 
 ---
@@ -925,6 +927,7 @@ AppController + MainWindow(真配置)        构造成功，标题 "OCR 识别�
 | 7 | `requirements.txt`（原 0 字节） | 改写成**说明文件**：声明它不是安装源、权威在 `pyproject.toml`、venv 无 pip；写明新机器四步（`uv sync` → 单独装 `paddlepaddle==3.3.1` 或 GPU 版 → 放 `models/official_models/` → `test\run_app.py --check`），并警告 `uv sync` 会卸掉 paddlepaddle（**以及 `pypylon`**，两个都不在 `pyproject.toml` 里） |
 | 8 | `app/controller.py` `start_source()` | **「路径不存在」被悄悄建成空文件夹**。`infra/csv_logger.py:64` 有 `self.path.parent.mkdir(parents=True, exist_ok=True)`，会话 CSV 又落在所选目录里 → 用户路径写错时目录被顺手建出来，程序当成空文件夹跑完一遍，界面只表现成「什么都没发生」。新增前置校验：非摄像头模式先 `os.path.exists(path)`，单图再要求 `os.path.isfile`，不满足就 `source_error` 报「路径不存在：…」并退回空闲 |
 | 9 | `ui/widgets/source_panel.py` `set_engine_busy()` | 相机改造时**把 tooltip 弄丢了**：按钮变灰却不说明原因（`test/test_engine_ready.py:109` 抓到的）。恢复为 `模型正在加载，加载完成才能开始`，非加载态清空 |
+| 10 | `app/workers.py` `CameraWorker._loop_capture` + `config.yaml` `camera.max_backlog` | **相机取图会静默丢工件**（A3 关闭，m05837）。老逻辑：取一张就 `_ack.wait(30.0)` 等推理完 —— 等待期间电眼又触发几次，而取流策略是 `GrabStrategy_LatestImageOnly`（只保留最新一张未被取走的图），中间的帧在相机里**被覆盖**，工件从未被看过；`frames_in` 只数取到的帧，所以界面永远自洽。改为**取图与推理解耦**：`frame_ready.emit` 后立刻回去取下一张，帧进 `InferenceWorker` 的 FIFO 队列顺序消费；新增 `self._inflight` 计数与 `max_backlog`（默认 60）硬背压，到顶就暂停取图（让相机顶着）而**不静默丢帧**，`frame_done()` 现在只负责 `_inflight -= 1`。实测（假相机严格模拟单槽位覆盖，12 次触发 @30ms，每帧 100ms）：**新架构 12/12 全处理（1.34s）；旧架构等价配置 max_backlog=1 只有 5/12**，丢 7 个工件（indices `[0,3,6,10,11]`） |
 
 > **第 8、9 条是常驻回归测试抓到的，不是看代码看出来的** —— 坐实了下面 A12 的意义：
 > 改完相机那一大轮之后，`test/test_source_state.py` 与 `test/test_engine_ready.py` 双双变红。
@@ -935,7 +938,7 @@ AppController + MainWindow(真配置)        构造成功，标题 "OCR 识别�
 |---|---|---|---|
 | **A1** | `infra/basler_camera.py` 全链路 | **真机从未出过一帧**。pypylon 26.9 已装（`import pypylon.pylon` 可用、不依赖 Pylon SDK 运行时），但 `EnumerateDevices()` 返回 **0 台**；`C:\Program Files\Basler` 的 Pylon 运行时未装。曝光/触发/pypylon 兼容性全部未验证 | 装 Pylon 运行时 + 接相机 + 用 Pylon Viewer 先确认能出图，再跑本程序 |
 | **A2** | `core/preprocess.py` `find_roi` | 半景参数（`min_radius=20` / `max_radius=200` / `roi_size=116`）全部按 demo 的 **926×1082** 样张调的；acA1300-60gm 是 **1280×1024**，镜头/工作距离一变，半径就可能落在 `[20,200]` 之外 → 每帧 `circle_not_found` | 接上相机后按实测半径调这三个数（设计文档 §16.9） |
-| **A3** | `infra/basler_camera.py:116` | `StartGrabbing(GrabStrategy_LatestImageOnly, ...)` = 「只要最新帧」，触发快于取图时会**丢帧**，与「不丢帧」直接冲突 | 改 `OneByOne` 并实测产线节拍；`16.5` 已写明物理上限 |
+| ~~**A3**~~ | `app/workers.py` `_loop_capture` + `infra/basler_camera.py:116` | ~~`LatestImageOnly` =「只要最新帧」，触发快于取图时会丢帧~~ | ✅ **已修**（见 §7.4 第 10 条）：根因是「取一张就等推理完」，不是策略本身。改为取图与推理解耦 + `max_backlog` 背压 |
 | **A4** | `infra/basler_camera.py:141-148` | `grab()` 只在读 `self._cam` 时持锁，`RetrieveResult` 在锁外；`close()` 可能在另一线程同时 `StopGrabbing/Close` → 异常路径可能段错误 | 把取图与关闭纳入同一把锁，或加 `_closing` 标志 |
 | **A5** | `app/controller.py` `_ack_source` | 回调时才读 `self.current_source`；若「停止 → 立刻重新开始」，上一帧的处理完成信号会 ack 到**新的**输入源（可能让它提前取下一帧） | 在提交帧时把当时的源/令牌一起带上，回调只 ack 那个令牌 |
 | **A6** | `core/pipeline.py:45` + `core/decision.py:23` | `decider.decide(num)` 不传 `status`，而 `decision.py` 有这个参数（默认 `"ok"`）→ 参数形同虚设 | 传 `res.status` |
@@ -1120,8 +1123,10 @@ self._load_worker.done.connect(self.engine_status.emit)
 8. **把真机相机接上，出第一帧（§7.4 A1，现在最靠前的一条）** —— 装 Pylon 运行时 →
    用 **Pylon Viewer** 确认能出图 → 再跑本程序「测试摄像头」。顺手按实测半径调
    `min_radius` / `max_radius` / `roi_size`（A2）。
-9. 按 §7.4 排剩下的隐患，建议顺序：**A3（`LatestImageOnly` 会丢帧，与不丢帧冲突）→
+9. 按 §7.4 排剩下的隐患，建议顺序：**~~A3~~（已修，取图与推理解耦）→
    A4（`grab`/`close` 竞态）→ A11（`_on_result` 在 GUI 线程落盘）→ A5（ack 可能发错源）**。
+   另需实测产线节拍：单帧 228ms（8 角度）⇒ 上限 4.4 件/秒，超过就会把
+   `max_backlog` 顶满然后相机开始丢触发 —— 界面的「待处理 N」是这只表。
 10. `serial.last_port` / `baudrate` 要不要接线到 `SerialPanel`（缺陷 D3 另一半，A8）
 11. 第 7 节剩下的待修缺陷：①CSV 截断、③有效范围重复定义、⑦整帧常驻内存、
    ⑧`decide` 的 status 参数（**②双重 shutdown 已于 2026-11-02 修掉**，见 §7.4）
@@ -1250,3 +1255,4 @@ git add -A ; git commit -m "说明"
 | m05115 | 用户：「每个模块都添加一个折叠按钮，能够折叠面板，但要设定一个窗口最小高度能够保证显示区域不被压缩」→ 新增 `ui/widgets/collapsible.py`（`CollapsibleGroupBox`，**六个面板的共同基类**）：`setTitle("")` + 粗体标题 `QLabel` + 右侧 ▼/▶ 按钮；子类把 `QVBoxLayout(self)` 换成 `self.body_layout()`，其余一行不动；折叠 = `body.setVisible(False)`，`QVBoxLayout` 自动把尺寸算成 0；点标题也能折；`collapsed_changed(bool)` 只在状态真变时发。六个面板折叠后都缩到 39px（历史 42px）。**窗口最小高度** = 图像区 480 + 历史区 123 + 状态栏 22 + 16 = **641px**，按全展开算、与折叠状态无关 —— 折叠只让位，不让显示区被压扁。历史区在 `QSplitter` 里不会自动缩，`MainWindow._on_history_collapsed` 显式改份额 + `setMaximumHeight` 钉住 |
 | m05331 | 用户：「我需要启动时默认摄像头模式」→ `config.yaml` 的 `source.type: "camera"`（这个改动其实是用户 11:56 自己改的，随 `612c81c` 一并入库）；`SourcePanel` 启动即选中「摄像头」，显示「摄像头序号 / FPS / 测试摄像头」+「保存张数 / 原图历史 / 识别历史」+ 状态行 `未连接相机`，而路径框 / 间隔 / 循环**隐藏**。其余 `source.*` 键都可以省略（省略时走默认值 15 / 300 / false）。点「开始」仍被控制器两道闸拦住：先 `models_ready`，再 `camera_tested`（`app/controller.py:start_source`），所以启动态点开始会弹「模型未加载」或「请先点测试摄像头」|
 | m05411 | 用户：「帮我看一下还有什么要解决的问题或隐患，然后更新设计文档和记忆」→ **全量源码审计**（不只靠记忆）。修掉 7 项：`.gitignore` 补 3 条（`logs/*.bak-*.csv` / `logs/captures_raw/` / `logs/captures_result/`）、删死代码 `CameraSource`（+`threading`/`QThread` 导入）、`shutdown()` 等加载线程 `wait(60000)`、`InferenceWorker.stop` 超时 2000→30000、**停止时在飞帧不再丢记录**（`_close_csv_after_flight` + `_maybe_close_session_csv()`）、`closeEvent` 不再调 `shutdown()`（缺陷②关闭）、`requirements.txt` 从 0 字节改为说明文件。记下 **A1–A12** 12 条待处理隐患，详见 §7.4 |
+| m05837 | 用户说明生产节拍语义：「电眼检测到一个零件就发一次信号，摄像头拍一次照，可以确保摄像头内只有一个零件……每一帧就代表一个工件」→ 查证 **A3 是真丢件**：`CameraWorker._loop_capture` 取一张就 `_ack.wait(30.0)` 等推理完，期间电眼再触发时 `LatestImageOnly` **静默覆盖**中间帧。改为取图与推理解耦（emit 后立刻取下一张，FIFO 队列消费）+ `camera.max_backlog: 60` 硬背压。实测：假相机（单槽位覆盖）12 次触发 @30ms、每帧 100ms ⇒ **新 12/12（1.34s），旧等价配置 5/12（丢 indices 0,3,6,10,11）**。同时量出角度→耗时：8 角度 228ms / 24 角度 691ms / 72 角度 2024ms（约 28ms 每角度），即 8 角度上限 4.4 件/秒 |
