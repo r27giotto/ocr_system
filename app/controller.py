@@ -13,7 +13,7 @@ from core.pipeline import OcrPipeline
 from infra.serial_service import SerialService
 from infra.csv_logger import CsvLogger
 from infra.capture_store import CaptureStore
-from infra.image_source import FolderSource, CameraSource
+from infra.image_source import FolderSource
 from core.render import draw_overlay
 
 from app.workers import EngineLoadWorker, InferenceWorker, CameraWorker
@@ -90,6 +90,8 @@ class AppController(QObject):
         # 本次运行的 CSV（一次运行一份，跟着运行起止开合）
         self._session_csv = None
         self.session_csv_path = None
+        # ★ 按下「停止」后不要立刻关会话 CSV，等在飞的最后一帧落完再关。
+        self._close_csv_after_flight = False
         # ★ 引擎状态：只有**加载成功**才把模型名交给 Recognizer。
         #   以前在 load_models() 开头就 set_models()，加载一失败，
         #   rec_model_name 已经是新名字，之后每帧都抛
@@ -241,6 +243,7 @@ class AppController(QObject):
         """开一份新的会话 CSV。写不进去**不阻断运行**，只在状态栏说一声 ——
         全局总账还会照写，不至于一张记录都不留。"""
         self._close_session_csv()
+        self._close_csv_after_flight = False
         try:
             self._session_csv = CsvLogger(target, mode="w")
             self.session_csv_path = target
@@ -292,6 +295,18 @@ class AppController(QObject):
                 return
         else:
             path = cfg["path"]
+            # ★ 路径必须先自己校验。`CsvLogger.__init__` 会
+            #   `self.path.parent.mkdir(parents=True, exist_ok=True)`（csv_logger.py:64），
+            #   而会话 CSV 就落在所选目录里 —— 于是「路径写错了」会被它顺手**建出来**，
+            #   变成一个空文件夹，用户看到的是「跑完一遍什么都没发生」，而不是「路径不对」。
+            if not path or not os.path.exists(path):
+                self.source_state.emit(False)
+                self.source_error.emit("路径不存在：%s" % (path or "(空)"))
+                return
+            if t == "single" and not os.path.isfile(path):
+                self.source_state.emit(False)
+                self.source_error.emit("这不是一个文件：%s" % (path,))
+                return
             loop = cfg["loop"] and t == "folder"
             src = FolderSource(path, cfg["interval_ms"], loop)
             # 文件 / 单图模式：CSV 直接落到所选目录（单图则落到图片所在目录）
@@ -321,11 +336,26 @@ class AppController(QObject):
         src, self.current_source = self.current_source, None
         if src is None:
             self._close_session_csv()
+            self._close_csv_after_flight = False
             return
         # 先落回空闲再 stop()：摄像头 stop 要等读帧线程退出（最多 2s），
         # 这段时间界面不该还显示「运行中」。
         self._set_source_state(False)
         src.stop()
+        # ★ 不在这里立刻关会话 CSV：人按「停止」的瞬间，很可能还有一帧在推理
+        #   线程里（`frames_in > results_out`）。那一行结果回来时表已经关了，
+        #   就只能进全局总账 —— 违反「每张图都要有记录」(m03412)。
+        #   改成打一个标记，等那帧落完再关（`_on_result` 末尾会来收尾）。
+        self._close_csv_after_flight = True
+        self._maybe_close_session_csv()
+
+    def _maybe_close_session_csv(self):
+        """「停止」后的延迟收尾：等最后一帧的结果落完再关本次运行的 CSV。"""
+        if not self._close_csv_after_flight:
+            return
+        if self.frames_in > self.results_out:
+            return                      # 还有帧在推理线程里，等它出来
+        self._close_csv_after_flight = False
         self._close_session_csv()
 
     def _set_source_state(self, running: bool):
@@ -406,6 +436,9 @@ class AppController(QObject):
             ok, msg = self.serial.send_value(res.output_value)
             self.serial_sent.emit(res.output_value, ok, msg)
 
+        # 5) 若刚才按了「停止」，这一帧就是最后一帧：现在可以关会话 CSV 了
+        self._maybe_close_session_csv()
+
     # ---------- 串口 ----------
     def refresh_ports(self):
         return SerialService.list_ports()
@@ -428,6 +461,13 @@ class AppController(QObject):
         self._stop_preview()
         self._close_session_csv()
         self.capture_store = None
+        # ★ 加载线程必须等它自己结束再退出：QThread 还在 run() 里就被销毁，
+        #   Qt 会 `QThread: Destroyed while thread is still running` 直接崩进程。
+        #   模型加载在 C++ 里没有安全的取消点，只能等（首次加载可能十几秒）。
+        if self._load_worker is not None and self._load_worker.isRunning():
+            print("[shutdown] 模型还在加载，等它结束再退出 …")
+            if not self._load_worker.wait(60000):
+                print("[shutdown] 警告：加载线程 60s 未结束")
         self.infer_worker.stop()
         self.serial.close()
         self.csv.close()

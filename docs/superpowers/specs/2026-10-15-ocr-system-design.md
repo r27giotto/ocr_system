@@ -2,7 +2,7 @@
 
 | 项 | 值 |
 |---|---|
-| 日期 | 2026-10-15（初稿）／ **2026-10-16 修订（v1.2）** ／ **2026-10-16 再修订（v1.3）** ／ **2026-10-19 修订（v1.4）** ／ **2026-10-19 再修订（v1.5）** ／ **2026-10-19 再修订（v1.6、v1.7、v1.8）** ／ **2026-10-25 修订（v1.9）** ／ **2026-10-25 再修订（v2.0）** ／ **2026-11-02 修订（v2.1）** |
+| 日期 | 2026-10-15（初稿）／ **2026-10-16 修订（v1.2）** ／ **2026-10-16 再修订（v1.3）** ／ **2026-10-19 修订（v1.4）** ／ **2026-10-19 再修订（v1.5）** ／ **2026-10-19 再修订（v1.6、v1.7、v1.8）** ／ **2026-10-25 修订（v1.9）** ／ **2026-10-25 再修订（v2.0）** ／ **2026-11-02 修订（v2.1、v2.2）** |
 | 主题 | ocr_system：圆形标记数字识别 → 判定 `G`/`NG` → 串口裸字节驱动 Arduino 喷气阀吹掉不良品 |
 | 状态 | 设计**已定稿，§12 的 6 个待裁定问题全部关闭**（m03646）；**「图像 → OCR → G/NG → 串口 → 板子输出」主链已全段实测**（m03833：跑图后 NG 帧 Arduino 板载 LED 亮）。唯一没验的是**气动阀实际吹气**（未接阀/气源），见 §14。**分发形态已定：不做 exe，双击快捷方式启动**（m00434，见 §14） |
 | 文档用途 | 交给一个没参与过讨论的构建者，让他能据此排计划并动手，不必回头问人 |
@@ -17,6 +17,8 @@
 | v1.9 变更 | **分发形态改为「双击快捷方式」**（m00232 先做 exe → m00434 用户改口「不需要 exe，只要一个图标点击就能运行」，打包方案整套拆除）：新增 `resources/icons/ocr.ico`、根目录 `OCR系统.lnk` 与桌面快捷方式（→ `.venv\Scripts\pythonw.exe "main.py"`）；`main.py` 补 `pythonw` 下 `sys.stdout/stderr is None` 的保护与 `logs/crash.log`；**换机器自适配保留**（`config.yaml` 新增 `engine.device: auto`，`core/engine.py` 加设备探测与 GPU→CPU 回退）。§5.1 目录树、§11 D10、§14 状态表与下一步、§15 环境与依赖同步 |
 | v2.0 变更 | **模型加载与开跑的时序漏洞修掉（m00804，用户对 J5 拍板「按 ①+②+④ 直接改」）**：控制器成为「引擎是否就绪」的唯一真源（`models_ready` / `_loading`）；`start_source` 在**未加载**和**加载中**两种情况下都拒绝开跑并给出说明；**检测运行中禁止加载模型**（避免输入源线程被 `EngineManager` 的锁堵住）；`rec.set_models()` 从 `load_models()` 开头移到**加载成功之后**，杜绝失败后每帧 `No engine bindings registered for model '<名>'`；`engine_status` 带上模型名，切换下拉框未加载时面板显示「已加载 A（当前选 B 未加载）」。§10 J5 备注、§11 **新增 D13**、§13 新增第 13 条验收；回归测试 `test/test_engine_ready.py` |
 | v2.1 变更 | **摄像头从占位改成真硬件（m04085–m04130）**：Basler `acA1300-60gm` GigE + NPN 电眼**硬件触发**（不经 Arduino）。**新增 §16「摄像头模式」**（生命周期状态机、取帧语义、不丢帧的物理上限、双目录时间戳落盘、界面增项、代码落点、三个现场要调的参数）。§7 配置新增 `camera:` / `history:` / `storage:` 三段，并注明**唯二会写回 config 的两个数字**；§8 面板表与 §8.2 历史规则改为「默认 10 张、可调、写回」并新增**「识别历史」/「原图历史」两个开目录按钮**；§13 验收 +4 条；§14 状态表标注摄像头模式**完全未实现**；§15 依赖新增 `pypylon` + Pylon 软件套件 |
+
+| v2.2 变更 | **2026-11-02 全量审计（m05411）**：重读全部运行路径源码，修掉 **9 项** —— `.gitignore` 补 3 条（`logs/*.bak-*.csv` / `logs/captures_raw/` / `logs/captures_result/`）、删除死代码 `CameraSource`、`shutdown()` 等加载线程 `wait(60000)`、`InferenceWorker.stop` 超时 2000→30000、**停止时在飞帧不再丢记录**（`_close_csv_after_flight` + `_maybe_close_session_csv()`）、`closeEvent` 不再重复 `shutdown()`（D8 关闭）、`requirements.txt` 改为说明文件、**`start_source()` 前置校验路径**（原先 `CsvLogger` 的 `mkdir(parents=True)` 会把写错的路径悄悄建成空文件夹，程序表现成"什么都没发生"）、**恢复 `set_engine_busy()` 的 tooltip**（相机改造时弄丢）。**新增 §11.5「审计新增隐患 A1–A12」**；§16.5 补 **A3（`LatestImageOnly` 会丢帧）** 的明确警示；§14 状态表同步。其中最后两项是**常驻回归测试抓到的**，不是读代码看出来的 |
 
 **阅读约定**：本文严格区分三类内容 ——
 - **【用户定的】**：用户本人明确说过的，不可擅自推翻
@@ -791,9 +793,33 @@ AppController.load_models('PP-OCRv6_small_rec', 'PP-LCNet_x1_0_textline_ori')
 - 全部 GUI 交互（只点过「加载模型」和「开始/停止」）
 - 实时视频流（只跑过离屏、单帧、静态样张）
 
-**已验证通过的**：全项目语法编译、21 个模块 import、`find_roi` 在真实样张上 11/11 找到圆、
+**已验证通过的**：全项目语法编译、26 个模块 import、`find_roi` 在真实样张上 11/11 找到圆、
 `build_variants` 六角度尺寸正确、`AppController + MainWindow` 能用真配置构造出来、
-角度面板与历史面板的离屏交互验收（见 §8.1 / §8.2）、**单帧端到端 12 张样张 11/12 ok**。
+角度面板与历史面板的离屏交互验收（见 §8.1 / §8.2）、**单帧端到端 12 张样张 11/12 ok**、
+**相机模式 35 项假相机集成验收**（`_verify_camera_ui.py`）与 19 项启动态验收。
+
+### 11.5 2026-11-02 审计新增隐患 A1–A12（m05411）
+
+这一轮把全部运行路径源码重读了一遍。**先修掉 9 项零风险的**（见头部 v2.2 变更；
+其中 D8「双重 shutdown」就此关闭）。下面 12 条是**读代码确认、但未修**的，按危险度排：
+
+| # | 位置 | 问题与后果 | 建议 |
+|---|---|---|---|
+| **A1** | `infra/basler_camera.py` 全链路 | **真机从未出过一帧**。`pypylon` 26.9 已装、`import pypylon.pylon` 可用（且不依赖 Pylon SDK 运行时），但 `EnumerateDevices()` 返回 **0 台**，`C:\Program Files\Basler` 的 Pylon 运行时也没装。曝光 / 硬件触发（`Line1`）/ 网口协商 / 与 `acA1300-60gm` 的兼容性**全部未验证**；相机模式的真实结果只来自 `_verify_camera_ui.py` 里的 `FakeCamera` 替身 | 装 Pylon 运行时 → **先用 Pylon Viewer 确认能出图** → 再跑本程序的「测试摄像头」 |
+| **A2** | `core/preprocess.py` `find_roi` | 半景参数 `min_radius=20` / `max_radius=200` / `roi_size=116` 全部按 demo 的 **926×1082** 样张调的；`acA1300-60gm` 是 **1280×1024**，镜头或工作距离一变半径就可能落在 `[20,200]` 之外 → **每帧 `circle_not_found`** | 接上相机后按实测半径调这三个数（§16.9 已列） |
+| **A3** | `infra/basler_camera.py:116` | `StartGrabbing(GrabStrategy_LatestImageOnly, ...)` = 「只要最新帧」，**触发快于取图时会丢帧**，与 §6.6「不丢帧」直接冲突 | 改 `GrabStrategy_OneByOne` 并实测产线节拍（§16.5 已写明物理上限） |
+| **A4** | `infra/basler_camera.py:141-148` | `grab()` 只在读 `self._cam` 时持锁，`RetrieveResult` 在**锁外**；`close()` 可能在另一线程同时 `StopGrabbing` / `Close` → 异常停止路径可能段错误 | 取图与关闭纳入同一把锁，或加 `_closing` 标志 |
+| **A5** | `app/controller.py` `_ack_source` | 回调时才读 `self.current_source`；若「停止 → 立刻重新开始」，上一帧的处理完成信号会 ack 到**新的**输入源（可能让它提前取下一帧） | 提交帧时把当时的源/令牌一起带上，回调只 ack 那个令牌 |
+| **A6** | `core/pipeline.py:45` + `core/decision.py:23` | `decider.decide(num)` 不传 `status`，而 `decision.py` 有该参数（默认 `"ok"`）→ 参数形同虚设（即原 D8 之外的旧账） | 传 `res.status` |
+| **A7** | `config.yaml` + `core/recognizer.py` | `valid_min` / `valid_max` 两处重复定义，会漂移（即原 D4） | 收敛到一处 |
+| **A8** | `config.yaml` `serial.last_port` / `baudrate` | 未被 `SerialPanel` 使用（面板硬编码，即原 D3 剩的那一半） | 与 `source:` 同法接线 |
+| **A9** | `pyproject.toml` | `paddlepaddle` **故意**不在依赖里（用户要走 GPU 官方源）→ **`uv sync` 会把它卸掉** | 已知取舍；`requirements.txt` 与 §15 已写明，别踩 |
+| **A10** | 本文 §16 | builder-check 的 **Q3**（运行中相机掉线怎么处置）、**Q4**（硬件在哪）仍未答 | 等用户裁 |
+| **A11** | `app/controller.py` `_on_result` | 在 **GUI 线程**做叠层绘制 + 2 份 CSV + 2 张 PNG 编码落盘 + 串口写；单张 PNG 约 10–30ms，节拍快时会卡界面 | 落盘挪到工作线程，或降采样后再编码 |
+| **A12** | 全项目 | **无自动化测试**：所有验收都是临时 `_verify_*.py`、跑完即删，回归全靠人看 | 固化成 `test/` 下的常驻用例 |
+
+**A1 的意义要单独强调**：本文 §16 描述的是「摄像头模式怎么工作」，但**至今没有任何一帧来自真机**。
+凡是涉及曝光、触发、网口、像素比例的结论，都是**按 pypylon 文档推论**，读 §16 时请当作待验证草案。
 
 ---
 
@@ -883,7 +909,7 @@ AppController.load_models('PP-OCRv6_small_rec', 'PP-LCNet_x1_0_textline_ori')
 | 目录骨架（7 目录 / 31 文件） | ✅ 完成 |
 | **环境与依赖** | ✅ 完成（见 §15）—— 模型**实测可加载** |
 | `core/` 七个模块 | ✅ 代码完整；`preprocess.find_roi`/`build_variants` 已用真实样张实测；**`recognizer` 的聚合选果已用真实模型 + 真实样张实测**（见 §6.3）；其余未跑过 |
-| `infra/` 三个模块 | ✅ 代码完整；`FolderSource` **已实测**（single-shot + 一帧在飞，见 §6.6）；`CameraSource` 的新等待逻辑**无硬件未实测** |
+| `infra/` 五个模块 | ✅ 代码完整；`FolderSource` **已实测**（single-shot + 一帧在飞，见 §6.6）；`basler_camera` / `capture_store` / `config_writer` 只用**替身/临时目录**验收过（`_verify_camera_ui.py` 35 项、`_verify_config_writer.py` 30 项），**真机未验证**（§11.5 A1）。旧的 USB `CameraSource` 已于 2026-11-02 删除 |
 | `app/` 两个模块 | ✅ 代码完整；`EngineLoadWorker` 加载链路**实测通过**；`InferenceWorker` 不丢帧 + 背压**实测通过**（12 张进 12 张出） |
 | `ui/` 主窗口 + 叠层 + 七个面板 | ✅ 代码完整；加载模型链路实测通过，角度面板 / 历史面板 / 状态栏对账离屏验收通过 |
 | 配置 / 入口 | ✅ 完成 |
@@ -894,15 +920,15 @@ AppController.load_models('PP-OCRv6_small_rec', 'PP-LCNet_x1_0_textline_ori')
 | **设计问答** | ✅ **全部关闭**（Q1–Q6 均已有用户裁定，见 §12） |
 | 图标 / 启动快捷方式 | ✅ **已完成**：`resources/icons/ocr.ico`；根目录 `OCR系统.lnk` + 桌面 `OCR 识别系统.lnk`，均指向 `.venv\Scripts\pythonw.exe "main.py"`（无控制台窗口）。已用等价启动路径实测：进程存活 45 s、`logs/crash.log` 为空、界面/模型加载正常。**打包 exe 方案已放弃**（用户 m00434） |
 | **模型就绪门禁（D13 / J5）** | ✅ **已完成并回归**（m00804）：未加载 / 加载中不许开跑，运行中不许加载，加载失败不污染模型名，切换下拉框如实提示；`test/test_engine_ready.py` 6 组离屏全过 |
-| **摄像头模式（§16）** | ❌ **完全未实现**。现状：`infra/image_source.py` 的 `CameraSource` 是 OpenCV `cv2.VideoCapture` 占位实现，**不接 Basler**；`pypylon` 未装；`infra/basler_camera.py` / `infra/capture_store.py` / `infra/config_writer.py` / `app/workers.CameraWorker` 都不存在；「测试摄像头」「原图历史」「识别历史」三个按钮和「保存张数」「保留条数」两个数字框都没有 |
-| **历史面板 10 张上限** | ❌ 未实现，当前仍是 `MAX_ITEMS = 200` 硬编码；「识别历史」按钮也没有 |
+| **摄像头模式（§16）** | 🟡 **代码齐全、流程用假相机验收通过、真机一帧未出**。已实现：`infra/basler_camera.py`（pypylon 封装、硬件触发、`is_available()`）、`infra/capture_store.py`（双目录滚动落盘）、`infra/config_writer.py`（写回两个数字）、`app/workers.CameraWorker`（预览 + 采集两个循环）、`SourcePanel` 的「测试摄像头 / 保存张数 / 原图历史 / 识别历史」、启动即摄像头模式。**未实现/未验证**：`EnumerateDevices()` 返回 0 台、Pylon 运行时未装 → 曝光/触发/像素比例全部未验（§11.5 A1、A2），取帧策略还会丢帧（A3） |
+| **历史面板 10 张上限** | ✅ **已实现**：`history.max_items`（默认 10，界面可调、写回 config），`HistoryPanel` 不再硬编码 `MAX_ITEMS=200`；「识别历史 / 原图历史」两个按钮都能打开对应目录 |
 
 **下一步的优先事项**：
-1. **实现摄像头模式（§16）** ← 唯一还在纸上的功能块。顺序建议：
-   (a) 装 `pypylon` + Pylon 软件套件，先用 **Pylon Viewer** 确认相机连得上、触发线接对了；
-   (b) 写 `infra/basler_camera.py`，在无 GUI 的脚本里跑通「开相机 → 配硬件触发 → 遮一次出图」；
-   (c) 再接进 `CameraWorker` / `SourcePanel` / 生命周期状态机；
-   (d) 最后做落盘与滚动删除。
+1. **把真机相机接上，出第一帧（§11.5 A1，现在最靠前的一条）**。顺序建议：
+   (a) 装 Pylon 运行时（`C:\Program Files\Basler` 目前没有），先用 **Pylon Viewer** 确认相机连得上、触发线接对了；
+   (b) 跑本程序「测试摄像头」，确认预览出图；
+   (c) 按实测半径调 `min_radius` / `max_radius` / `roi_size`（A2）；
+   (d) 把取帧策略改成 `OneByOne` 并实测产线节拍（A3）。
 2. **接气源 + 喷气嘴，确认真能吹掉料** ← 影像链之外最后一段没验的。顺带确认：
    (a) `PULSE_MS = 100` 对实际喷气嘴合不合适（固件注释：典型电磁阀 10~50 ms）；
    (b) **`'0'` 提前关阀会不会掐断脉冲** —— 帧间隔 < 100 ms 时才会暴露（§9），
@@ -921,28 +947,38 @@ AppController.load_models('PP-OCRv6_small_rec', 'PP-LCNet_x1_0_textline_ori')
 **解释器（必须用这个）**：`E:\Python Project\ocr_system\.venv\Scripts\python.exe`
 （Python 3.12.10，uv 管理，base `E:\Python312`）。系统默认的 `E:\Python313\python.exe` **不带**这些依赖。
 
-**已装版本**：**paddlepaddle-gpu 3.3.0**（`is_compiled_with_cuda()=True`，本机 1 张卡、Compute Capability 6.1；
-CUDA 运行库由 8 个 `nvidia-*` cu11 wheel 提供，**不在 `paddle/libs` 里**）、**paddlex 3.7.2**、
+**已装版本（2026-11-02 本机实测）**：**paddlepaddle 3.3.1（CPU 版，`is_compiled_with_cuda()=False`）**、
+**paddlex 3.7.2**、
 numpy **2.3.5**（不是 2.5.4，原因见 §11 阻塞项 2 的版本约束）、
 opencv-contrib-python 5.0.0.93、PyQt6 6.11.0（qt6 6.11.2 / sip 13.13.0）、pyserial 3.5、PyYAML 6.0.2、
-pandas 3.0.6、Pillow 12.3.0、pypdfium2 5.14.0、python-bidi 0.6.11。
+pandas 3.0.6、Pillow 12.3.0、pypdfium2 5.14.0、python-bidi 0.6.11、**pypylon 26.9**。
 **paddleocr 没装**（不需要，我们直接调 paddlex）。**venv 里没有 pip**（uv 建的），装包一律用 `uv pip install`。
 **PyInstaller 未安装也不需要使用**（打包方案已废弃，见 §14）。
+
+> **GPU 版不在本机**：曾经有一版 `paddlepaddle-gpu 3.3.0`（`is_compiled_with_cuda()=True`、
+> CUDA 运行库由 8 个 `nvidia-*` cu11 wheel 提供、不在 `paddle/libs` 里），**当前这台机器装的是 CPU 版**。
+> 要换 GPU 版：`uv pip install paddlepaddle-gpu==3.3.1 -i https://www.paddlepaddle.org.cn/packages/stable/cu118/`
+> （先 `uv pip uninstall paddlepaddle`）。注意 `uv sync` 会把两个都卸掉，见 §11.5 A9。
 
 **`pyproject.toml` 的依赖（每行带原因，改动前先读注释）**：
 
 ```toml
 "numpy>=2.3.5",                    # 不能写 >=2.5.4：paddlex 3.7.2 要求 numpy<2.4
 "opencv-contrib-python>=5.0.0.93", # 只留 contrib（opencv-python 的超集，避免两个发行版争 cv2/）
-"paddlepaddle>=3.3.1",
 "paddlex>=3.7.2",                  # 3.4.3 没有注册 PP-OCRv6_*
 "pypdfium2>=5.14.0",
 "python-bidi>=0.6.11",
 "pyqt6>=6.11.0",
 "pyserial>=3.5",
-# ↓ 摄像头模式新增（§16），尚未安装
-"pypylon>=26.9",                   # Basler 相机的 Python 绑定；需另装 Pylon 软件套件
+"pyyaml>=6.0.2",
+"pyqt6-sip>=13.13.0",
 ```
+
+> ⚠️ **`paddlepaddle` 和 `pypylon` 都不在上面**（2026-11-02 实测），但 venv 里两个都装着
+> （paddlepaddle 3.3.1 / pypylon 26.9）。后果：**`uv sync` 会把这两个一起卸掉**，
+> 卸完 `import paddle` 失败、相机模式也起不来。见 §11.5 A9。
+> `paddlepaddle` 是**故意的**（CPU/GPU 两个包名两个源）；`pypylon` 属于漏登记，若要补，
+> 加一行 `"pypylon>=26.9"` 即可（它是纯 wheel，没有原生运行时依赖，装了不用也无害）。
 
 **模型已全部本地化到项目内**：`E:\Python Project\ocr_system\models\official_models\`（15 个目录，477.1 MB）。
 
@@ -1039,6 +1075,13 @@ GigE 侧三件必做（不属代码，属部署）：网卡与相机**同网段*
 但要说清一件硬件上的事：**如果推理比产线节拍慢，被丢的会是相机内部的触发**（相机缓冲满了就丢触发），
 这不在软件控制范围内。所以硬性前提是 **单帧耗时 < 产线间隔**，否则"软件没丢、物理上丢了"。
 （当前实测单帧 ≈ 220 ms，节拍要求用户明确说「先不考虑」，但这条约束必须记在文档里。）
+
+> ⚠️ **实现上还有一个会主动丢帧的地方，与本节直接冲突（§11.5 A3）**：
+> 当前代码用的是 `StartGrabbing(GrabStrategy_LatestImageOnly, GrabLoop_ProvidedByUser)`
+> ——「只要最新帧」，取图稍慢它就把中间的旧帧扔掉。软件**下游**确实没丢，
+> 但**上游已经丢了**，§6.6 的保证在这里是假的。
+> 改成 `GrabStrategy_OneByOne` 才能让「每张图都处理」真的成立；
+> 代价是推理跟不上时程序会越跑越慢而不是跳过，这正是下面那条物理上限要做的事。
 
 ### 16.6 落盘：两个基础目录 + 时间戳子目录
 

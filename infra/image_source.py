@@ -1,8 +1,7 @@
 import os
-import threading
 
 import cv2
-from PyQt6.QtCore import QObject, QTimer, QThread, pyqtSignal
+from PyQt6.QtCore import QObject, QTimer, pyqtSignal
 
 IMG_EXTS = (".png", ".jpg", ".jpeg", ".bmp", ".tif", ".tiff", ".webp")
 
@@ -105,58 +104,3 @@ class FolderSource(BaseSource):
         self._running = False
         self._inflight = False
         self._timer.stop()
-
-
-class CameraSource(QThread, BaseSource):
-    """USB 摄像头源，独立线程读帧，避免阻塞 UI。
-
-    ★ 不再「按 fps 闷头读」：读一帧 → 发给推理 → **等这一帧处理完** → 再读下一帧。
-    原来那样读，推理排不过来时缓冲区里的帧会被顶掉，等于漏检。
-    """
-
-    frame_ready = pyqtSignal(object, str)
-    read_failed = pyqtSignal(str)
-    finished = pyqtSignal()
-
-    def __init__(self, index: int = 0, fps: int = 15):
-        QThread.__init__(self)
-        self.index = index
-        self.interval = 1.0 / max(1, fps)
-        self._running = False
-        self._ack = threading.Event()   # 跨线程放行，Event 本身是线程安全的
-
-    def start(self):
-        self._running = True
-        QThread.start(self)
-
-    def run(self):
-        cap = cv2.VideoCapture(self.index, cv2.CAP_DSHOW)   # ★ Windows 用 DSHOW
-        if not cap.isOpened():
-            self._running = False
-            self.finished.emit()
-            return
-        n = 0
-        while self._running:
-            self._ack.clear()
-            ok, frame = cap.read()
-            if not ok:
-                break
-            n += 1
-            self.frame_ready.emit(frame, f"cam_{n:06d}")
-            # 等这帧处理完；每 0.1s 醒一次好让 stop() 能及时退出
-            while self._running and not self._ack.wait(0.1):
-                pass
-            if not self._running:
-                break
-            self.msleep(int(self.interval * 1000))
-        cap.release()
-        self._running = False
-        self.finished.emit()
-
-    def frame_done(self):
-        self._ack.set()
-
-    def stop(self):
-        self._running = False
-        self._ack.set()        # 唤醒可能正卡在等待里的读帧线程
-        self.wait(2000)

@@ -227,6 +227,9 @@ class SourcePanel(CollapsibleGroupBox):
         推理线程堵在加载器后面。"""
         self._engine_busy = bool(busy)
         self.btn_start.setEnabled(not self._running and not self._engine_busy)
+        # 按钮变灰时必须说明原因，否则用户只看到一个点不动的按钮。
+        self.btn_start.setToolTip(
+            "模型正在加载，加载完成才能开始" if self._engine_busy else "")
 
     def set_running_false(self):
         self.set_running(False)

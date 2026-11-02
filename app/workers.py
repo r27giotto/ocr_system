@@ -84,9 +84,18 @@ class InferenceWorker(QThread):
                 # 即使 UI 槽函数抛异常，也要放行下一帧，否则整条产线卡死
                 self.frame_processed.emit(name)
 
-    def stop(self):
+    def stop(self, timeout_ms: int = 30000):
+        """等队列里那帧算完再退。
+
+        ★ 以前只等 2s：37 个角度 × 正负号（最多 73 个变体）在慢 CPU 上一帧
+        可能超过 2s，等待超时后 QThread 还在跑就被销毁 ——
+        `QThread: Destroyed while thread is still running` 会让进程直接崩。
+        这里给足 30s；真的还不退只打警告（进程退出时由系统回收），
+        绝不主动销毁一个还在跑的线程。
+        """
         self._running = False
-        self.wait(2000)
+        if not self.wait(timeout_ms):
+            print("[shutdown] 警告：推理线程 %d ms 内未退出" % timeout_ms)
 
 
 class CameraWorker(QThread):

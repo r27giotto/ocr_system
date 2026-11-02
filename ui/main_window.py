@@ -291,5 +291,8 @@ class MainWindow(QMainWindow):
         self.status_bar.showMessage("  |  ".join(parts))
 
     def closeEvent(self, e):
-        self.controller.shutdown()
+        # 收尾统一交给 `main.py` 的 `app.aboutToQuit.connect(controller.shutdown)`。
+        # 那里一定会触发一次；以前这里也调一次，关窗口时 shutdown 会跑两遍
+        # （缺陷清单 ②）。重复调用虽大多幂等，但现在是「会阻塞等加载线程」的
+        # 逻辑，跑两遍没有意义。
         e.accept()

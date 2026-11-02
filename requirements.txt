@@ -1,0 +1,31 @@
+# ⚠️ 本文件不是安装源，项目里没有任何代码读它。
+#
+# 依赖的**权威来源**是 `pyproject.toml`（uv 管理，`uv.lock` 锁版本）。
+# `.venv` 里也没有 pip —— uv 建的虚拟环境默认不装 pip，
+# 所以 `pip install -r requirements.txt` 在这里根本跑不起来。
+#
+# 在新机器上把环境装起来的正确步骤：
+#
+#   1) uv sync
+#        按 pyproject.toml + uv.lock 装齐依赖（PyQt6 / paddlex / numpy /
+#        opencv-contrib-python / pypdfium2 / python-bidi / pyserial / PyYAML / pypylon）。
+#
+#   2) 单独装 paddlepaddle —— 它**故意**不写进 pyproject.toml
+#        原因：CPU 版和 GPU 版是**两个不同的包名、来自两个不同的源**，
+#        写死其中一个会让另一类机器装不上（详见 PROJECT_MEMORY.md §8.5）。
+#        CPU：uv pip install paddlepaddle==3.3.1
+#        GPU：uv pip install paddlepaddle-gpu==3.3.1 -i https://www.paddlepaddle.org.cn/packages/stable/cu118/
+#
+#   3) 放模型
+#        把 `models/official_models/`（477 MB，不入库）放到项目根目录下，
+#        或删掉它让 PaddleX 联网重新下载一次。
+#
+#   4) 自检
+#        .venv\Scripts\python.exe test\run_app.py --check
+#
+# 注意：`uv sync` 会**把不在 pyproject.toml 里的包卸掉**，也就是会卸掉上面第 2 步
+# 装的 paddlepaddle。所以以后每次 `uv sync` 之后，都要重新执行第 2 步。
+#
+# ⚠️ 同一个坑还有第二个：`pypylon`（Basler 相机绑定）**也不在 pyproject.toml 里**，
+#    但 venv 里装着 26.9。`uv sync` 之后相机模式会直接起不来，需要补回：
+#        uv pip install pypylon==26.9

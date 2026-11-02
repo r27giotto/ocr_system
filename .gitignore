@@ -26,6 +26,13 @@ uv-cache/
 # 每次启动都会重写，不入库（目录本身由 logs/.gitkeep 保留）
 logs/*.log
 logs/*.csv
+# CSV 迁移时留的备份：results.bak-20261102-101010.csv。上面那条 logs/*.csv
+# 匹配不到它（文件名中间多了 .bak-时间戳），不补这行备份文件会被提交进去。
+logs/*.bak-*.csv
+# 相机模式的落盘目录（config.yaml 的 storage.capture_raw_dir / capture_result_dir）。
+# 跑一轮就是几十张 PNG，绝不能进仓库。改成别的路径的话记得同步这里。
+logs/captures_raw/
+logs/captures_result/
 
 # ---------- 模型权重 ----------
 # 模型放在项目内的 models/official_models/（由 main.py 里的 PADDLE_PDX_CACHE_HOME 指定），
@@ -56,3 +63,9 @@ _probe_*.py
 _*.txt
 _*.png
 _*.log
+logs/_audit_tmp/
+
+# ---------- 审计/临时目录残留 ----------
+# `tempfile.mkdtemp(dir=工作区)` 建出来的目录在本机沙箱下会带受限 ACL，
+# 事后连删除都会被拒（audit_wcvyf3at 就是这么留下的）。留着不影响运行，挡在门外即可。
+audit_*/
