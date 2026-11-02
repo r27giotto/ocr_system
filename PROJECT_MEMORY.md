@@ -242,7 +242,8 @@ recognizer: conf_threshold: 0.5   debug_aggregate: true
             angles: [-90,-60,-30,0,30,60,90,180]   drop_zero: true
 preprocess: roi_size: 116   scale: 1.0   clahe_clip: 2.0   clahe_grid: [8,8]
             min_radius: 20   max_radius: 200
-source:     type: "folder"   folder_path: ""   camera_index: 0   fps: 15
+source:     type: "camera"     （目前只有这一个键；下面几个都可省，省了走默认值）
+            folder_path: ""   camera_index: 0   fps: 15
             poll_interval_ms: 300   loop: false
 serial:     baudrate: 115200   last_port: "COM3"
             （`send_on_change_only` 已于 m03412 删除，别再写回去）
@@ -256,6 +257,10 @@ serial:     baudrate: 115200   last_port: "COM3"
 > （缺键时兜底 `folder` / 15 / 300 / **false**）。界面上改了**不会写回**
 > `config.yaml`。`loop` 默认 **false（不勾选）**——`FolderSource` 放完一遍就
 > `finished`；勾上才从头再来。
+>
+> **当前默认是 `type: "camera"`（m05331，用户要求启动即摄像头模式）**。
+> 这一种下路径框 / 间隔 / 循环都隐藏，显示的是「摄像头序号 + FPS + 测试摄像头」
+> 和「保存张数 + 原图历史 + 识别历史」，相机状态行显示 `未连接相机`。
 
 > 角度面板分**两组**（`ui/widgets/angle_panel.py`）：
 >
@@ -1188,3 +1193,4 @@ git add -A ; git commit -m "说明"
 | m05032 | 用户：「时间戳改成时间精确到毫秒」→ `infra/csv_logger.py`：新增模块级 `format_time(ts)`（`datetime.fromtimestamp(...).strftime("%Y-%m-%d %H:%M:%S.%f")[:-3]`，非法值返回空串），`write()` 的 `timestamp` 改用它；表头「时间戳」→ **「时间」**；新增 `_LEGACY_HEADERS`（v2.1 英文 / v2.2「时间戳」+Unix 秒）与 `_to_time_text()`，迁移时把第 1 列的 Unix 秒**转成可读时间**（其余列照抄、认不出的表头不动）。验收 28 项全过（`_verify_csv_time.py`，已删）：格式 `2025-10-09 16:53:19.123` 毫秒精度 / 非法值空串 / 新文件与追加 / 旧中文表头迁移且 Unix 秒转成时间、备份保留原始值 / 旧英文表头同迁移 / 表头已对时不重复转换 / 陌生表头不改写 / 覆盖模式。真实 `logs/results.csv` 已迁移（33 条数据保留，首条 `2026-11-02 11:19:30.644`，备份 `results.bak-20261102-115024.csv`）|
 | m05075 | 用户（配输入源面板截图）：「把摄像头模式选项移到最左边」→ `ui/widgets/source_panel.py` 的 `type_row` 顺序改为 `rb_camera → rb_folder → rb_single`（原来是 文件夹/单图/摄像头）。默认选中仍是文件夹（由 `config.yaml` 的 `source.type` 决定，本次没动）。验收 10 项全过（`_verify_radio_order.py`，已删）：摄像头 x=14 / 文件夹 x=80 / 单图 x=146，三者同一行、文字不截断；切到摄像头后测试按钮与存图行照常出现、循环复选框照常隐藏 |
 | m05115 | 用户：「每个模块都添加一个折叠按钮，能够折叠面板，但要设定一个窗口最小高度能够保证显示区域不被压缩」→ 新增 `ui/widgets/collapsible.py`（`CollapsibleGroupBox`，**六个面板的共同基类**）：`setTitle("")` + 粗体标题 `QLabel` + 右侧 ▼/▶ 按钮；子类把 `QVBoxLayout(self)` 换成 `self.body_layout()`，其余一行不动；折叠 = `body.setVisible(False)`，`QVBoxLayout` 自动把尺寸算成 0；点标题也能折；`collapsed_changed(bool)` 只在状态真变时发。六个面板折叠后都缩到 39px（历史 42px）。**窗口最小高度** = 图像区 480 + 历史区 123 + 状态栏 22 + 16 = **641px**，按全展开算、与折叠状态无关 —— 折叠只让位，不让显示区被压扁。历史区在 `QSplitter` 里不会自动缩，`MainWindow._on_history_collapsed` 显式改份额 + `setMaximumHeight` 钉住 |
+| m05331 | 用户：「我需要启动时默认摄像头模式」→ `config.yaml` 的 `source.type: "camera"`（这个改动其实是用户 11:56 自己改的，随 `612c81c` 一并入库）；`SourcePanel` 启动即选中「摄像头」，显示「摄像头序号 / FPS / 测试摄像头」+「保存张数 / 原图历史 / 识别历史」+ 状态行 `未连接相机`，而路径框 / 间隔 / 循环**隐藏**。其余 `source.*` 键都可以省略（省略时走默认值 15 / 300 / false）。点「开始」仍被控制器两道闸拦住：先 `models_ready`，再 `camera_tested`（`app/controller.py:start_source`），所以启动态点开始会弹「模型未加载」或「请先点测试摄像头」|

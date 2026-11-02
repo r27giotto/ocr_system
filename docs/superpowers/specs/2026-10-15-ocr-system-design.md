@@ -410,7 +410,9 @@ recognizer: conf_threshold: 0.5   debug_aggregate: true   drop_zero: true
             angles: [...]   drop_zero: true
 preprocess: roi_size: 116   scale: 1.0   clahe_clip: 2.0   clahe_grid: [8,8]
             min_radius: 20   max_radius: 200
-source:     type/folder_path/camera_index/fps/poll_interval_ms/loop
+source:     type: "camera"      （用户定：m05331 起启动默认摄像头模式）
+            folder_path / camera_index / fps / poll_interval_ms / loop
+            （这几个都可以省，省了走默认 folder 语义的空值 / 0 / 15 / 300 / false）
 camera:     trigger_line: "Line1"   trigger_activation: "RisingEdge"
             exposure_us: 2000   timeout_ms: 1000
             max_saved_images: 10     （滚动保留最新 N 张，m04119/m04130）
